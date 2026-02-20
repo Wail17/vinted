@@ -43,26 +43,60 @@ export async function getUnreadConversations() {
 
   if (config.debugInbox) await debugInbox();
 
-  // Call Vinted's internal inbox API from inside the browser so that all
-  // cookies (including the auth token) are automatically included.
-  log('[messageHandler] Calling /api/v2/inbox …');
-  const apiResponse = await page.evaluate(async () => {
-    const r = await fetch(
-      'https://www.vinted.be/api/v2/inbox?page=1&per_page=20',
-      { credentials: 'include' }
-    );
-    return r.json();
-  });
+  // Try candidate API endpoints in order until one returns valid JSON.
+  const ENDPOINTS = [
+    'https://www.vinted.be/api/v2/conversations?page=1&per_page=20',
+    'https://www.vinted.be/api/v2/messages?page=1&per_page=20',
+    'https://www.vinted.be/web/v2/inbox?page=1&per_page=20',
+  ];
+
+  const FETCH_OPTS = {
+    credentials: 'include',
+    headers: {
+      Accept: 'application/json',
+      'X-Requested-With': 'XMLHttpRequest',
+    },
+  };
+
+  let apiResponse = null;
+  for (const url of ENDPOINTS) {
+    log(`[messageHandler] Trying endpoint: ${url}`);
+    const result = await page.evaluate(async ({ url, opts }) => {
+      const r = await fetch(url, opts);
+      const text = await r.text();
+      console.log('status:', r.status, 'response preview:', text.slice(0, 500));
+      return { status: r.status, text };
+    }, { url, opts: FETCH_OPTS });
+
+    log(`[messageHandler] ${url} → status ${result.status}, preview: ${result.text.slice(0, 500)}`);
+
+    if (result.status === 200) {
+      try {
+        apiResponse = JSON.parse(result.text);
+        log(`[messageHandler] Valid JSON from ${url}`);
+        break;
+      } catch {
+        log(`[messageHandler] ${url} returned status 200 but not JSON — trying next.`);
+      }
+    } else {
+      log(`[messageHandler] ${url} returned status ${result.status} — trying next.`);
+    }
+  }
+
+  if (!apiResponse) {
+    log('[messageHandler] ERROR: All API endpoints failed. Check logs for response previews.');
+    return [];
+  }
 
   // Log the full response so we can inspect its shape.
   log('[messageHandler] API response: ' + JSON.stringify(apiResponse, null, 2));
 
-  // The API returns something like { conversations: [...] } or { threads: [...] }.
-  // Try the most common key names; if neither exists fall back to an empty array.
+  // Cover common top-level key names across Vinted API versions.
   const items =
     apiResponse.conversations ||
     apiResponse.threads       ||
     apiResponse.inbox         ||
+    apiResponse.messages      ||
     [];
 
   if (!Array.isArray(items) || items.length === 0) {
