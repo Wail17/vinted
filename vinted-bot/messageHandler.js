@@ -5,9 +5,6 @@ import { getPage } from './browser.js';
 import { config } from './config.js';
 import { randomDelay, log } from './utils.js';
 
-const THREAD_SELECTOR = '[class*="thread"] a';
-const INBOX_CONVO_RE  = /\/inbox\/(\d+)/;
-
 // ─── Debug helpers ────────────────────────────────────────────────────────────
 
 async function debugInbox() {
@@ -25,71 +22,77 @@ async function debugInbox() {
     log(`[messageHandler][debug] HTML dump failed: ${err.message}`);
   }
   log(`[messageHandler][debug] URL: ${page.url()}`);
-  const count = await page.$$eval(THREAD_SELECTOR, (els) => els.length).catch(() => 0);
-  log(`[messageHandler][debug] "${THREAD_SELECTOR}" → ${count} element(s)`);
 }
 
 // ─── Core functions ───────────────────────────────────────────────────────────
 
 /**
- * Navigate to the Vinted inbox and return ALL conversations found in the
- * thread list. handled.json deduplication in main.js prevents double-replies.
+ * Navigate to the Vinted inbox page (to activate the session cookies), then
+ * call the internal API endpoint to retrieve the conversation list.
  *
  * Returns: [{ conversationUrl, conversationId, senderName, itemTitle }]
  */
 export async function getUnreadConversations() {
   const page = getPage();
 
-  log(`[messageHandler] Navigating to ${config.vintedInboxUrl}…`);
+  // Load the inbox page first so that all session cookies are live in the
+  // browser context before we make the API call.
+  log(`[messageHandler] Navigating to ${config.vintedInboxUrl} to warm up session…`);
   await page.goto(config.vintedInboxUrl, { waitUntil: 'networkidle', timeout: 30000 });
-
-  // Vinted SPA redirects /inbox → /inbox/<id> (last viewed thread).
-  // Navigate back to the bare /inbox so the full thread list is the active view.
-  if (INBOX_CONVO_RE.test(page.url())) {
-    log(`[messageHandler] Redirected to ${page.url()} — re-navigating to inbox root…`);
-    await page.goto(config.vintedInboxUrl, { waitUntil: 'networkidle', timeout: 30000 });
-  }
-
-  await randomDelay(1000, 2000); // let lazy-loaded threads finish rendering
-
-  // Wait for at least one thread link to appear
-  try {
-    await page.waitForSelector(THREAD_SELECTOR, { timeout: 10000 });
-  } catch {
-    log('[messageHandler] WARNING: Thread list did not appear within 10 s.');
-    if (config.debugInbox) await debugInbox();
-    return [];
-  }
+  await randomDelay(1000, 2000);
 
   if (config.debugInbox) await debugInbox();
 
-  // Collect every unique conversation href from the thread list
-  const conversations = await page.$$eval(THREAD_SELECTOR, (anchors) => {
-    // Log sample hrefs so we can see the actual URL format in the console
-    console.log('sample hrefs:', anchors.slice(0, 5).map((a) => a.href));
-
-    const seen = new Set();
-    const results = [];
-    for (const a of anchors) {
-      const href = a.href || '';
-      // Loose match: accept any href that contains "/inbox/" (with or without a trailing id)
-      if (!href.includes('/inbox/')) continue;
-      // Extract the segment after /inbox/ as the conversation id
-      const m = href.match(/\/inbox\/([^/?#]+)/);
-      const id = m ? m[1] : href; // fall back to full href as key if no clean segment
-      if (seen.has(id)) continue;
-      seen.add(id);
-      results.push({
-        conversationUrl: href,
-        conversationId: id,
-        senderName: '',
-        itemTitle: '',
-      });
-    }
-    return results;
+  // Call Vinted's internal inbox API from inside the browser so that all
+  // cookies (including the auth token) are automatically included.
+  log('[messageHandler] Calling /api/v2/inbox …');
+  const apiResponse = await page.evaluate(async () => {
+    const r = await fetch(
+      'https://www.vinted.be/api/v2/inbox?page=1&per_page=20',
+      { credentials: 'include' }
+    );
+    return r.json();
   });
 
-  log(`[messageHandler] Found ${conversations.length} conversation(s).`);
+  // Log the full response so we can inspect its shape.
+  log('[messageHandler] API response: ' + JSON.stringify(apiResponse, null, 2));
+
+  // The API returns something like { conversations: [...] } or { threads: [...] }.
+  // Try the most common key names; if neither exists fall back to an empty array.
+  const items =
+    apiResponse.conversations ||
+    apiResponse.threads       ||
+    apiResponse.inbox         ||
+    [];
+
+  if (!Array.isArray(items) || items.length === 0) {
+    log('[messageHandler] WARNING: No conversations found in API response. Check the log above for the actual keys.');
+    return [];
+  }
+
+  const base = config.vintedInboxUrl.replace(/\/inbox.*$/, '');
+  const conversations = items.map((item) => {
+    // Field names vary; cover the common variants.
+    const id   = String(item.id ?? item.conversation_id ?? item.thread_id ?? '');
+    const sender =
+      item.opposite_user?.login  ||
+      item.sender?.login         ||
+      item.user?.login           ||
+      item.opposite_user?.name   ||
+      '';
+    const title =
+      item.item?.title  ||
+      item.listing?.title ||
+      '';
+    return {
+      conversationId:  id,
+      conversationUrl: `${base}/inbox/${id}`,
+      senderName:      sender,
+      itemTitle:       title,
+    };
+  }).filter((c) => c.conversationId);
+
+  log(`[messageHandler] Found ${conversations.length} conversation(s) via API.`);
   return conversations;
 }
 
