@@ -43,13 +43,7 @@ export async function getUnreadConversations() {
 
   if (config.debugInbox) await debugInbox();
 
-  // Try candidate API endpoints in order until one returns valid JSON.
-  const ENDPOINTS = [
-    'https://www.vinted.be/api/v2/conversations?page=1&per_page=20',
-    'https://www.vinted.be/api/v2/messages?page=1&per_page=20',
-    'https://www.vinted.be/web/v2/inbox?page=1&per_page=20',
-  ];
-
+  const INBOX_API = 'https://www.vinted.be/inbox?page=1&per_page=20';
   const FETCH_OPTS = {
     credentials: 'include',
     headers: {
@@ -58,76 +52,82 @@ export async function getUnreadConversations() {
     },
   };
 
-  let apiResponse = null;
-  for (const url of ENDPOINTS) {
-    log(`[messageHandler] Trying endpoint: ${url}`);
-    const result = await page.evaluate(async ({ url, opts }) => {
-      const r = await fetch(url, opts);
-      const text = await r.text();
-      console.log('status:', r.status, 'response preview:', text.slice(0, 500));
-      return { status: r.status, text };
-    }, { url, opts: FETCH_OPTS });
+  log(`[messageHandler] Calling inbox API: ${INBOX_API}`);
+  const result = await page.evaluate(async ({ url, opts }) => {
+    const r = await fetch(url, opts);
+    const text = await r.text();
+    console.log('status:', r.status, 'response preview:', text.slice(0, 500));
+    return { status: r.status, text };
+  }, { url: INBOX_API, opts: FETCH_OPTS });
 
-    log(`[messageHandler] ${url} → status ${result.status}, preview: ${result.text.slice(0, 500)}`);
+  log(`[messageHandler] status: ${result.status}, preview: ${result.text.slice(0, 500)}`);
 
-    if (result.status === 200) {
-      try {
-        apiResponse = JSON.parse(result.text);
-        log(`[messageHandler] Valid JSON from ${url}`);
-        break;
-      } catch {
-        log(`[messageHandler] ${url} returned status 200 but not JSON — trying next.`);
-      }
-    } else {
-      log(`[messageHandler] ${url} returned status ${result.status} — trying next.`);
-    }
-  }
-
-  if (!apiResponse) {
-    log('[messageHandler] ERROR: All API endpoints failed. Check logs for response previews.');
+  let apiResponse;
+  try {
+    apiResponse = JSON.parse(result.text);
+  } catch {
+    log('[messageHandler] ERROR: Inbox API did not return valid JSON. See preview above.');
     return [];
   }
 
-  // Log the full response so we can inspect its shape.
   log('[messageHandler] API response: ' + JSON.stringify(apiResponse, null, 2));
 
-  // Cover common top-level key names across Vinted API versions.
-  const items =
-    apiResponse.conversations ||
-    apiResponse.threads       ||
-    apiResponse.inbox         ||
-    apiResponse.messages      ||
-    [];
-
+  const items = apiResponse.conversations || [];
   if (!Array.isArray(items) || items.length === 0) {
-    log('[messageHandler] WARNING: No conversations found in API response. Check the log above for the actual keys.');
+    log('[messageHandler] No conversations found in API response.');
     return [];
   }
 
-  const base = config.vintedInboxUrl.replace(/\/inbox.*$/, '');
-  const conversations = items.map((item) => {
-    // Field names vary; cover the common variants.
-    const id   = String(item.id ?? item.conversation_id ?? item.thread_id ?? '');
-    const sender =
-      item.opposite_user?.login  ||
-      item.sender?.login         ||
-      item.user?.login           ||
-      item.opposite_user?.name   ||
-      '';
-    const title =
-      item.item?.title  ||
-      item.listing?.title ||
-      '';
-    return {
-      conversationId:  id,
-      conversationUrl: `${base}/inbox/${id}`,
-      senderName:      sender,
-      itemTitle:       title,
-    };
-  }).filter((c) => c.conversationId);
+  const unread = items.filter((c) => c.unread === true);
+  log(`[messageHandler] ${items.length} conversation(s) total, ${unread.length} unread.`);
 
-  log(`[messageHandler] Found ${conversations.length} conversation(s) via API.`);
-  return conversations;
+  return unread.map((item) => ({
+    conversationId:  String(item.id),
+    conversationUrl: `https://www.vinted.be/inbox/${item.id}`,
+    senderName:      item.opposite_user?.login || '',
+    lastMessage:     item.description || '',
+  }));
+}
+
+/**
+ * Fetch messages for a conversation via the Vinted inbox API.
+ * GET https://www.vinted.be/inbox/{id} with JSON headers → parse messages array.
+ * Returns: [{ author, text }]
+ */
+export async function getConversationMessages(conversationId) {
+  const page = getPage();
+  const url = `https://www.vinted.be/inbox/${conversationId}`;
+  const FETCH_OPTS = {
+    credentials: 'include',
+    headers: {
+      Accept: 'application/json',
+      'X-Requested-With': 'XMLHttpRequest',
+    },
+  };
+
+  log(`[messageHandler] Fetching messages via API: ${url}`);
+  const result = await page.evaluate(async ({ url, opts }) => {
+    const r = await fetch(url, opts);
+    const text = await r.text();
+    console.log('status:', r.status, 'response preview:', text.slice(0, 500));
+    return { status: r.status, text };
+  }, { url, opts: FETCH_OPTS });
+
+  log(`[messageHandler] status: ${result.status}, preview: ${result.text.slice(0, 500)}`);
+
+  let apiResponse;
+  try {
+    apiResponse = JSON.parse(result.text);
+  } catch {
+    log(`[messageHandler] getConversationMessages: non-JSON response for ${url}`);
+    return [];
+  }
+
+  const raw = apiResponse.messages || apiResponse.conversation?.messages || [];
+  return raw.map((msg) => ({
+    author: msg.sender?.login || msg.user?.login || msg.author || 'unknown',
+    text:   msg.body || msg.text || msg.content || '',
+  }));
 }
 
 /**
