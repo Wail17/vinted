@@ -15,9 +15,13 @@ export const config = {
   // Max tokens for Claude responses (Vinted messages are short)
   maxTokens: 300,
 
-  // Vinted URLs
-  vintedBaseUrl: 'https://www.vinted.fr',
-  vintedInboxUrl: 'https://www.vinted.fr/inbox',
+  // Vinted URLs — override with VINTED_DOMAIN env var (e.g. vinted.be, vinted.fr)
+  vintedBaseUrl: `https://www.${process.env.VINTED_DOMAIN || 'vinted.be'}`,
+  vintedInboxUrl: `https://www.${process.env.VINTED_DOMAIN || 'vinted.be'}/inbox`,
+
+  // Debug mode: dump screenshot + HTML on every inbox poll
+  // Enable with DEBUG_INBOX=true in .env or environment
+  debugInbox: process.env.DEBUG_INBOX === 'true',
 
   // File paths
   sessionFile: process.env.SESSION_FILE || './session.json',
