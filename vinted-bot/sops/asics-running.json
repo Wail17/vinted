@@ -1,0 +1,16 @@
+{
+  "item": "ASICS Running homme – Blanc & Bleu",
+  "price_listed": 45,
+  "price_negotiated": 40,
+  "price_minimum": 38,
+  "style": "cool, short, no fluff, casual French tone",
+  "sensitive_info": "La paire est en 1.1 — mentionner uniquement si la personne pose la question en privé, jamais dans l'annonce",
+  "responses": {
+    "negotiation_mild": "Je peux faire 40 €, mais pas moins.",
+    "negotiation_low": "Non désolé, trop bas pour moi. Le mieux que je peux faire c'est 40 €.",
+    "last_price": "40 €.",
+    "hesitant": "À 40 €, on est bien pour tous les deux.",
+    "exception": "Ok pour 38 €, mais ce sera le dernier prix.",
+    "after_purchase": "Merci pour ton achat J'emballe la paire proprement et j'envoie en semaine. Je te préviens dès que c'est déposé."
+  }
+}
