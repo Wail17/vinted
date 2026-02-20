@@ -43,7 +43,7 @@ export async function getUnreadConversations() {
 
   if (config.debugInbox) await debugInbox();
 
-  const INBOX_API = 'https://www.vinted.be/inbox?page=1&per_page=20';
+  const INBOX_API = 'https://www.vinted.be/api/v2/inbox?page=1&per_page=20';
   const FETCH_OPTS = {
     credentials: 'include',
     headers: {
