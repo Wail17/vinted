@@ -63,17 +63,25 @@ export async function getUnreadConversations() {
 
   if (config.debugInbox) await debugInbox();
 
-  // Collect every unique /inbox/<id> href from the thread list
+  // Collect every unique conversation href from the thread list
   const conversations = await page.$$eval(THREAD_SELECTOR, (anchors) => {
+    // Log sample hrefs so we can see the actual URL format in the console
+    console.log('sample hrefs:', anchors.slice(0, 5).map((a) => a.href));
+
     const seen = new Set();
     const results = [];
     for (const a of anchors) {
-      const m = (a.href || '').match(/\/inbox\/(\d+)/);
-      if (!m || seen.has(m[1])) continue;
-      seen.add(m[1]);
+      const href = a.href || '';
+      // Loose match: accept any href that contains "/inbox/" (with or without a trailing id)
+      if (!href.includes('/inbox/')) continue;
+      // Extract the segment after /inbox/ as the conversation id
+      const m = href.match(/\/inbox\/([^/?#]+)/);
+      const id = m ? m[1] : href; // fall back to full href as key if no clean segment
+      if (seen.has(id)) continue;
+      seen.add(id);
       results.push({
-        conversationUrl: a.href,
-        conversationId: m[1],
+        conversationUrl: href,
+        conversationId: id,
         senderName: '',
         itemTitle: '',
       });
