@@ -6,12 +6,14 @@ import { config } from './config.js';
 import { randomDelay, log } from './utils.js';
 
 // ─── Selector candidates ─────────────────────────────────────────────────────
-// Vinted's class names are hashed and change with each deploy, so we cast a
-// wide net and log how many elements each strategy finds. That log + the HTML
-// dump will let you pinpoint the real selector on your live session.
+// Primary selector confirmed working on vinted.be (14 elements in live session).
+// Fallbacks are tried in order if the primary returns nothing.
+
+const THREAD_SELECTOR = '[class*="thread"] a';   // ← confirmed primary
 
 const CONVERSATION_LINK_SELECTORS = [
-  'a[href*="/conversation/"]',                  // universal — catches any link to a convo
+  THREAD_SELECTOR,                              // confirmed working on vinted.be
+  'a[href*="/conversation/"]',                  // universal href match
   'a[href*="/messages/"]',                      // older Vinted routing
   '[data-testid="inbox-item"] a',
   '[data-testid="conversation-item"] a',
@@ -20,35 +22,36 @@ const CONVERSATION_LINK_SELECTORS = [
   '[class*="inbox-item"] a',
   '[class*="ConversationItem"] a',
   '[class*="conversation-item"] a',
-  '[class*="thread"] a',
   '[role="listitem"] a[href*="/"]',
 ];
 
-// Attributes / child elements that Vinted uses to mark a conversation unread.
-// We try them all and OR the results.
+// Regex matching any Vinted conversation URL:
+//   /inbox/<id>  (vinted.be current format)
+//   /conversation/<id>  (older format)
+//   /messages/<id>  (even older)
+const CONVO_URL_RE = /\/(?:inbox|conversation|messages)\/(\d+)/;
+
+// Unread detection signals — evaluated inside the browser context.
+// Each function receives the thread container element and returns true if unread.
 const UNREAD_SIGNALS = [
-  // Class-based
-  (el) => el.classList.contains('is-unread'),
-  (el) => el.classList.contains('unread'),
-  (el) => [...el.classList].some((c) => c.toLowerCase().includes('unread')),
-  // Descendant badge / dot
-  (el) => el.querySelector('[class*="unread"]') !== null,
+  // Descendant badge / dot / notification indicator (most reliable on Vinted)
   (el) => el.querySelector('[class*="badge"]') !== null,
   (el) => el.querySelector('[class*="dot"]') !== null,
+  (el) => el.querySelector('[class*="unread"]') !== null,
   (el) => el.querySelector('[class*="notification"]') !== null,
-  // Bold text (unread convos typically show sender name in bold)
+  // Bold title text (Vinted bolds the sender name for unread threads)
   (el) => {
-    const strong = el.querySelector('strong, b');
-    if (strong) return true;
-    const spans = [...el.querySelectorAll('span')];
-    return spans.some((s) => {
-      const fw = window.getComputedStyle(s).fontWeight;
-      return fw === 'bold' || parseInt(fw, 10) >= 700;
-    });
+    const title =
+      el.querySelector('[class*="title"], [class*="sender"], [class*="name"], strong, b');
+    if (!title) return false;
+    if (title.tagName === 'STRONG' || title.tagName === 'B') return true;
+    const fw = window.getComputedStyle(title).fontWeight;
+    return fw === 'bold' || parseInt(fw, 10) >= 700;
   },
+  // Class on the container itself
+  (el) => [...el.classList].some((c) => c.toLowerCase().includes('unread')),
   // aria / data attributes
   (el) => el.getAttribute('aria-label')?.toLowerCase().includes('unread'),
-  (el) => el.dataset.unread !== undefined,
   (el) => el.dataset.read === 'false',
 ];
 
@@ -76,7 +79,12 @@ async function debugInbox() {
     log(`[messageHandler][debug] HTML dump failed: ${err.message}`);
   }
 
-  // Log a selector probe: try every candidate and report element counts
+  // Log current URL/title first — helps confirm redirect behaviour
+  log(`[messageHandler][debug] Current URL : ${page.url()}`);
+  log(`[messageHandler][debug] Page title  : ${await page.title()}`);
+  log(`[messageHandler][debug] URL has conversation ID: ${/\/inbox\/\d+/.test(page.url())}`);
+
+  // Probe every selector candidate and report element counts
   log('[messageHandler][debug] Probing selectors…');
   for (const sel of CONVERSATION_LINK_SELECTORS) {
     try {
@@ -86,10 +94,6 @@ async function debugInbox() {
       log(`[messageHandler][debug]   "${sel}" → (error)`);
     }
   }
-
-  // Log the page URL and title to confirm we are where we think we are
-  log(`[messageHandler][debug] Current URL : ${page.url()}`);
-  log(`[messageHandler][debug] Page title  : ${await page.title()}`);
 }
 
 // ─── Core functions ──────────────────────────────────────────────────────────
@@ -99,46 +103,53 @@ async function debugInbox() {
  * Each entry: { conversationUrl, senderName, itemTitle, conversationId }
  *
  * Strategy:
- *  1. Go to inbox, wait for network to settle (SPA hydration).
- *  2. Wait explicitly for at least one conversation link to appear.
- *  3. Collect ALL conversation links.
- *  4. Try multiple unread-detection signals; if none fire, return ALL
- *     conversations so messages are never silently missed.
+ *  1. Go to /inbox, wait for network idle (SPA hydration).
+ *  2. Vinted often redirects /inbox → /inbox/<id> (last open conversation).
+ *     If that happens, navigate to /inbox again so the full thread list loads.
+ *  3. Wait for THREAD_SELECTOR to appear, then collect all thread links.
+ *  4. For each thread, check the unread signals on its container.
+ *  5. If no threads are flagged unread, return ALL as safe fallback.
  */
 export async function getUnreadConversations() {
   const page = getPage();
 
   log(`[messageHandler] Navigating to ${config.vintedInboxUrl}…`);
-  await page.goto(config.vintedInboxUrl, {
-    waitUntil: 'networkidle',   // wait for React to finish rendering
-    timeout: 30000,
-  });
-  await randomDelay(1500, 2500); // extra buffer for lazy-loaded content
+  await page.goto(config.vintedInboxUrl, { waitUntil: 'networkidle', timeout: 30000 });
 
-  // Wait up to 10 s for at least one conversation link to appear
-  const firstSelector = CONVERSATION_LINK_SELECTORS[0]; // a[href*="/conversation/"]
+  // Vinted SPA redirects /inbox → /inbox/<conversationId> (last viewed thread).
+  // When that happens navigate back to the bare /inbox URL so the thread list
+  // panel is the active view, not a single conversation.
+  if (/\/inbox\/\d+/.test(page.url())) {
+    log(`[messageHandler] Redirected to ${page.url()} — re-navigating to inbox root…`);
+    await page.goto(config.vintedInboxUrl, { waitUntil: 'networkidle', timeout: 30000 });
+  }
+
+  await randomDelay(1000, 2000); // extra buffer for lazy-loaded thread list
+
+  // Wait for the thread list to render
   try {
-    await page.waitForSelector(firstSelector, { timeout: 10000 });
+    await page.waitForSelector(THREAD_SELECTOR, { timeout: 10000 });
   } catch {
-    log('[messageHandler] WARNING: No conversation links appeared within 10 s.');
+    log('[messageHandler] WARNING: Thread list did not appear within 10 s.');
     if (config.debugInbox) await debugInbox();
     return [];
   }
 
-  // Dump debug artefacts if requested
+  // Dump debug artefacts if requested (after threads are visible)
   if (config.debugInbox) await debugInbox();
 
-  // ── Step 1: collect all conversation links with a working selector ──
-  let rawLinks = [];
+  // ── Step 1: verify the primary selector and count links ──
+  let workingSelector = null;
   for (const sel of CONVERSATION_LINK_SELECTORS) {
     try {
-      const found = await page.$$eval(sel, (els) =>
-        [...new Set(els.map((el) => el.closest('a')?.href || el.href).filter(Boolean))]
-          .filter((href) => /\/conversation\/\d+|\/messages\/\d+/.test(href))
+      const count = await page.$$eval(
+        sel,
+        (els, re) => els.filter((el) => new RegExp(re).test(el.href || '')).length,
+        CONVO_URL_RE.source
       );
-      if (found.length > 0) {
-        log(`[messageHandler] Selector "${sel}" found ${found.length} conversation link(s).`);
-        rawLinks = found;
+      if (count > 0) {
+        log(`[messageHandler] Selector "${sel}" matched ${count} conversation link(s).`);
+        workingSelector = sel;
         break;
       }
     } catch {
@@ -146,17 +157,17 @@ export async function getUnreadConversations() {
     }
   }
 
-  if (rawLinks.length === 0) {
+  if (!workingSelector) {
     log('[messageHandler] No conversation links found with any selector.');
     return [];
   }
 
-  // ── Step 2: for each link, find its container and probe unread signals ──
+  // ── Step 2: extract conversations + unread status from thread containers ──
   const conversations = await page.$$eval(
-    CONVERSATION_LINK_SELECTORS[0],
-    (anchors, signals) => {
-      // signals are serialised as strings and eval'd inside the browser
-      const fns = signals.map((s) => {
+    workingSelector,
+    (anchors, signalStrings, convoReSource) => {
+      const convoRe = new RegExp(convoReSource);
+      const fns = signalStrings.map((s) => {
         try { return new Function('el', 'window', `return (${s})(el)`); } catch { return () => false; }
       });
 
@@ -165,20 +176,25 @@ export async function getUnreadConversations() {
 
       for (const anchor of anchors) {
         const href = anchor.href || '';
-        const idMatch = href.match(/\/(?:conversation|messages)\/(\d+)/);
+        const idMatch = href.match(convoRe);
         if (!idMatch || seen.has(idMatch[1])) continue;
         seen.add(idMatch[1]);
 
-        // Walk up to the list-item container (up to 5 levels)
-        let container = anchor;
-        for (let i = 0; i < 5; i++) {
+        // Walk up from the <a> to find the thread container (up to 6 levels)
+        let container = anchor.parentElement || anchor;
+        for (let i = 0; i < 6; i++) {
           if (!container.parentElement) break;
-          container = container.parentElement;
+          const parent = container.parentElement;
+          // Stop at a list item or an element whose class mentions "thread"
           if (
-            container.tagName === 'LI' ||
-            container.role === 'listitem' ||
-            container.getAttribute('role') === 'listitem'
-          ) break;
+            parent.tagName === 'LI' ||
+            parent.getAttribute('role') === 'listitem' ||
+            [...parent.classList].some((c) => c.toLowerCase().includes('thread'))
+          ) {
+            container = parent;
+            break;
+          }
+          container = parent;
         }
 
         const hasUnread = fns.some((fn) => {
@@ -200,7 +216,8 @@ export async function getUnreadConversations() {
 
       return results;
     },
-    UNREAD_SIGNALS.map((fn) => fn.toString())
+    UNREAD_SIGNALS.map((fn) => fn.toString()),
+    CONVO_URL_RE.source
   );
 
   log(`[messageHandler] Total conversations found: ${conversations.length}`);
@@ -208,14 +225,12 @@ export async function getUnreadConversations() {
   const unread = conversations.filter((c) => c.hasUnread);
   log(`[messageHandler] Conversations flagged as unread: ${unread.length}`);
 
-  // ── Fallback: if unread detection returned nothing but there ARE convos,
-  //    return ALL of them. main.js deduplication (handled.json) prevents
-  //    double-replies, so over-fetching is safe. ──
+  // ── Fallback: if no threads are flagged unread but threads exist,
+  //    return them all — handled.json deduplication prevents double-replies. ──
   if (unread.length === 0 && conversations.length > 0) {
     log(
-      '[messageHandler] WARNING: Unread detection returned 0 — ' +
-      'returning all conversations as fallback. Check /tmp/inbox-debug.* ' +
-      'to identify the real unread selector and update UNREAD_SIGNALS.'
+      '[messageHandler] WARNING: No unread signals matched — returning all conversations as fallback. ' +
+      'Inspect /tmp/inbox-debug.html to find the real unread indicator and refine UNREAD_SIGNALS.'
     );
     return conversations;
   }
