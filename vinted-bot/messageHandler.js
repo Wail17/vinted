@@ -78,10 +78,9 @@ export async function getUnreadConversations() {
     return [];
   }
 
-  const unread = items.filter((c) => c.unread === true);
-  log(`[messageHandler] ${items.length} conversation(s) total, ${unread.length} unread.`);
+  log(`[messageHandler] ${items.length} conversation(s) returned from API.`);
 
-  return unread.map((item) => ({
+  return items.map((item) => ({
     conversationId:  String(item.id),
     conversationUrl: `https://www.vinted.be/inbox/${item.id}`,
     senderName:      item.opposite_user?.login || '',

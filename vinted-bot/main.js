@@ -9,14 +9,13 @@ import { randomDelay, nextPollInterval, log, isHandled, markHandled } from './ut
 async function processConversation(conv) {
   log(`[main] Processing conversation ${conv.conversationId} with ${conv.senderName}`);
 
-  const { senderName, itemTitle, messages } = await readConversation(conv.conversationUrl);
-
-  // Deduplicate: skip if we already replied at this message count
-  const msgCount = messages.length;
-  if (isHandled(conv.conversationId, msgCount)) {
-    log(`[main] Already handled conversation ${conv.conversationId} at ${msgCount} messages — skipping.`);
+  // Deduplicate: skip if we already handled this exact last message
+  if (isHandled(conv.conversationId, conv.lastMessage)) {
+    log(`[main] Already handled conversation ${conv.conversationId} ("${conv.lastMessage.slice(0, 60)}") — skipping.`);
     return;
   }
+
+  const { senderName, itemTitle, messages } = await readConversation(conv.conversationUrl);
 
   // Find the latest buyer message
   const buyerMessages = messages.filter((m) => m.author === 'buyer');
@@ -29,7 +28,7 @@ async function processConversation(conv) {
   // Make sure the last message is not ours (avoid replying to ourselves)
   if (messages[messages.length - 1]?.author === 'me') {
     log(`[main] Last message is ours — skipping conversation ${conv.conversationId}.`);
-    markHandled(conv.conversationId, msgCount);
+    markHandled(conv.conversationId, conv.lastMessage);
     return;
   }
 
@@ -56,7 +55,7 @@ async function processConversation(conv) {
   await sendReply(reply);
 
   // Mark as handled
-  markHandled(conv.conversationId, msgCount + 1);
+  markHandled(conv.conversationId, conv.lastMessage);
   log(`[main] Done with conversation ${conv.conversationId}.`);
 }
 
@@ -65,7 +64,7 @@ async function poll() {
 
   try {
     const conversations = await getUnreadConversations();
-    log(`[main] Found ${conversations.length} unread conversation(s).`);
+    log(`[main] Found ${conversations.length} conversation(s).`);
 
     for (const conv of conversations) {
       try {

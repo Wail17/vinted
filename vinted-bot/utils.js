@@ -53,19 +53,19 @@ function saveHandled() {
 }
 
 /**
- * Returns true if we have already replied to this conversation+messageCount combo.
- * Using conversationId + message count as a key prevents double-replies.
+ * Returns true if we have already replied to this conversation+description combo.
+ * Using conversationId + last message text prevents double-replies.
  */
-export function isHandled(conversationId, messageCount) {
+export function isHandled(conversationId, description) {
   loadHandled();
-  return handled.has(`${conversationId}:${messageCount}`);
+  return handled.has(`${conversationId}:${description}`);
 }
 
 /**
- * Mark a conversation+messageCount as handled so we never reply twice.
+ * Mark a conversation+description as handled so we never reply twice.
  */
-export function markHandled(conversationId, messageCount) {
+export function markHandled(conversationId, description) {
   loadHandled();
-  handled.add(`${conversationId}:${messageCount}`);
+  handled.add(`${conversationId}:${description}`);
   saveHandled();
 }
