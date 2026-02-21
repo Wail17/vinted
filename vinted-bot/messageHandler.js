@@ -223,6 +223,20 @@ export async function readConversation(conversationUrl) {
 export async function sendReply(replyText) {
   const page = getPage();
 
+  // Dismiss cookie banner before interacting
+  try {
+    const acceptBtn = await page.$('#onetrust-accept-btn-handler, [class*="accept-all"], button[id*="accept"]');
+    if (acceptBtn) {
+      await acceptBtn.click();
+      await page.waitForTimeout(1000);
+    }
+  } catch(e) {}
+  // Also try to hide it via JS if click doesn't work
+  await page.evaluate(() => {
+    const sdk = document.getElementById('onetrust-consent-sdk');
+    if (sdk) sdk.remove();
+  });
+
   const inputSelectors = [
     'textarea[data-testid="message-input"]',
     'textarea[data-testid*="input"]',
