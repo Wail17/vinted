@@ -21,7 +21,14 @@ export async function loadSession() {
     );
   }
 
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({
+    headless: true,
+    proxy: {
+      server: 'http://geo.iproyal.com:12321',
+      username: process.env.PROXY_USERNAME,
+      password: process.env.PROXY_PASSWORD,
+    },
+  });
   const storageState = JSON.parse(fs.readFileSync(config.sessionFile, 'utf8'));
   context = await browser.newContext({
     storageState,
@@ -30,6 +37,11 @@ export async function loadSession() {
       '(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     locale: 'fr-FR',
     timezoneId: 'Europe/Paris',
+    proxy: {
+      server: 'http://geo.iproyal.com:12321',
+      username: process.env.PROXY_USERNAME,
+      password: process.env.PROXY_PASSWORD,
+    },
   });
 
   page = await context.newPage();
@@ -75,13 +87,25 @@ export async function isSessionValid() {
 if (process.argv.includes('--save-session')) {
   (async () => {
     console.log('[browser] Opening browser for manual login…');
-    const b = await chromium.launch({ headless: false });
+    const b = await chromium.launch({
+      headless: false,
+      proxy: {
+        server: 'http://geo.iproyal.com:12321',
+        username: process.env.PROXY_USERNAME,
+        password: process.env.PROXY_PASSWORD,
+      },
+    });
     const ctx = await b.newContext({
       userAgent:
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
         '(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
       locale: 'fr-FR',
       timezoneId: 'Europe/Paris',
+      proxy: {
+        server: 'http://geo.iproyal.com:12321',
+        username: process.env.PROXY_USERNAME,
+        password: process.env.PROXY_PASSWORD,
+      },
     });
     const p = await ctx.newPage();
     await p.goto('https://www.vinted.fr/login');
