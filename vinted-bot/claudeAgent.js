@@ -58,7 +58,11 @@ export function matchSop(itemTitle) {
  */
 function buildSystemPrompt(sop) {
   const sopJson = JSON.stringify(sop, null, 2);
-  return `Tu es moi. Tu réponds à mes messages Vinted à ma place. Voici mes règles pour cet article :
+  return `Tu ES le vendeur. Tu réponds AUX acheteurs qui t'envoient des messages.
+Ne jamais te présenter comme acheteur. Ne jamais t'excuser de confusion de rôles.
+Tu vends cet article et tu réponds aux questions des acheteurs.
+
+Voici tes règles pour cet article :
 
 ${sopJson}
 

@@ -198,23 +198,48 @@ export async function readConversation(conversationUrl) {
   if (bubbleSelector) {
     messages = await page.$$eval(bubbleSelector, (bubbles) =>
       bubbles.map((b) => {
-        const isOwn =
-          b.classList.contains('is-own') ||
-          b.closest('[class*="own"]') !== null ||
-          b.closest('[class*="sent"]') !== null ||
-          b.dataset.own === 'true' ||
-          b.dataset.sent === 'true';
-        return { author: isOwn ? 'me' : 'buyer', text: b.textContent.trim() };
+        // Walk up to 3 ancestors looking for sent/outgoing/right (me) indicators
+        const ownPatterns = ['sent', 'outgoing', 'right', 'is-own', 'own'];
+        const buyerPatterns = ['received', 'incoming', 'left'];
+        const matchesAny = (el, patterns) => {
+          const cls = (el.className || '').toLowerCase();
+          return patterns.some((p) => cls.includes(p));
+        };
+
+        let isOwn = b.dataset.own === 'true' || b.dataset.sent === 'true';
+        let isBuyer = false;
+        if (!isOwn) {
+          let el = b;
+          for (let i = 0; i < 4 && el; i++) {
+            if (matchesAny(el, ownPatterns)) { isOwn = true; break; }
+            if (matchesAny(el, buyerPatterns)) { isBuyer = true; break; }
+            el = el.parentElement;
+          }
+        }
+
+        // If neither class matched, default to buyer (better safe than silent)
+        const author = isOwn ? 'me' : 'buyer';
+        return { author, text: b.textContent.trim() };
       })
     );
   }
 
+  // Debug: log last 3 messages with their assigned role
+  const debugMsgs = messages.slice(-3).map((m) => ({
+    role: m.author,
+    preview: m.text.slice(0, 60),
+  }));
+  log(`[messageHandler] Last 3 messages: ${JSON.stringify(debugMsgs)}`);
+
+  // Only pass buyer messages to Claude — filter out my own replies
+  const buyerMessages = messages.filter((m) => m.author === 'buyer');
+
   log(
     `[messageHandler] Read conversation: sender="${senderName}", item="${itemTitle}", ` +
-    `messages=${messages.length}`
+    `total=${messages.length}, buyer=${buyerMessages.length}`
   );
 
-  return { senderName, itemTitle, messages };
+  return { senderName, itemTitle, messages: buyerMessages };
 }
 
 /**
