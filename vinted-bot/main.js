@@ -1,7 +1,7 @@
 // main.js — orchestrator: polling loop that ties everything together
 
 import 'dotenv/config';
-import { loadSession, isSessionValid, closeBrowser } from './browser.js';
+import { loadSession, isSessionValid, closeBrowser, refreshSession } from './browser.js';
 import { getUnreadConversations, readConversation, sendReply } from './messageHandler.js';
 import { matchSop, getClaudeReply } from './claudeAgent.js';
 import { randomDelay, nextPollInterval, log, isHandled, markHandled } from './utils.js';
@@ -119,6 +119,14 @@ async function main() {
   }
 
   log('[main] Session OK. Entering polling loop…');
+
+  // Refresh the Vinted session token every 6 hours so the bot never
+  // gets kicked out mid-run due to an expired access token.
+  const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+  setInterval(async () => {
+    log('[main] Scheduled token refresh…');
+    await refreshSession();
+  }, SIX_HOURS_MS);
 
   while (true) {
     try {

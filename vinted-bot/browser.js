@@ -5,6 +5,7 @@ import { chromium } from 'playwright';
 import fs from 'fs';
 import path from 'path';
 import { config } from './config.js';
+import { log } from './utils.js';
 
 let browser = null;
 let context = null;
@@ -79,6 +80,74 @@ export async function isSessionValid() {
     const loggedIn = await page.$('[data-testid="header--profile-btn"], a[href*="/member"]');
     return loggedIn !== null;
   } catch {
+    return false;
+  }
+}
+
+/**
+ * Refresh the Vinted session by exchanging the stored refresh_token_web cookie
+ * for a new access token via the Vinted token API.
+ * Updates both session.json on disk and the live browser context if running.
+ * Returns true on success, false on failure.
+ */
+export async function refreshSession() {
+  if (!fs.existsSync(config.sessionFile)) {
+    log('[browser] refreshSession: session file not found — skipping.');
+    return false;
+  }
+
+  const storageState = JSON.parse(fs.readFileSync(config.sessionFile, 'utf8'));
+  const refreshCookie = storageState.cookies?.find((c) => c.name === 'refresh_token_web');
+
+  if (!refreshCookie?.value) {
+    log('[browser] refreshSession: refresh_token_web cookie not found — skipping.');
+    return false;
+  }
+
+  try {
+    log('[browser] Refreshing session token…');
+    const response = await fetch(`${config.vintedBaseUrl}/api/v2/tokens`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshCookie.value }),
+    });
+
+    if (!response.ok) {
+      log(`[browser] Token refresh failed: HTTP ${response.status}`);
+      return false;
+    }
+
+    const data = await response.json();
+    const domain = `.${process.env.VINTED_DOMAIN || 'vinted.be'}`;
+
+    // Patch the access_token_web and refresh_token_web cookies in the stored state
+    const upsertCookie = (name, value) => {
+      const idx = storageState.cookies.findIndex((c) => c.name === name);
+      if (idx >= 0) {
+        storageState.cookies[idx] = { ...storageState.cookies[idx], value };
+      } else {
+        storageState.cookies.push({ name, value, domain, path: '/', httpOnly: true, secure: true, sameSite: 'Lax' });
+      }
+    };
+
+    if (data.access_token)  upsertCookie('access_token_web',  data.access_token);
+    if (data.refresh_token) upsertCookie('refresh_token_web', data.refresh_token);
+
+    fs.writeFileSync(config.sessionFile, JSON.stringify(storageState, null, 2), 'utf8');
+
+    // Also push the new cookies into the live browser context so the running
+    // session benefits immediately without needing a restart.
+    if (context) {
+      const liveCookies = [];
+      if (data.access_token)  liveCookies.push({ name: 'access_token_web',  value: data.access_token,  domain, path: '/' });
+      if (data.refresh_token) liveCookies.push({ name: 'refresh_token_web', value: data.refresh_token, domain, path: '/' });
+      if (liveCookies.length) await context.addCookies(liveCookies);
+    }
+
+    log('[browser] Session token refreshed successfully.');
+    return true;
+  } catch (err) {
+    log(`[browser] Token refresh error: ${err.message}`);
     return false;
   }
 }
