@@ -138,14 +138,26 @@ export async function readConversation(conversationUrl) {
   await page.goto(conversationUrl, { waitUntil: 'networkidle', timeout: 30000 });
   await randomDelay();
 
+  // Debug: log class names of first 3 candidate message elements to identify real selectors
+  const debugClasses = await page.evaluate(() => {
+    const candidates = document.querySelectorAll(
+      '[class*="message"], [class*="thread"], [class*="bubble"], [class*="Message"], [class*="Thread"]'
+    );
+    return Array.from(candidates).slice(0, 3).map((el) => el.className);
+  });
+  log(`[messageHandler] readConversation debug classes: ${JSON.stringify(debugClasses)}`);
+
   // Try selectors for message bubbles from most to least specific
   const bubbleSelectors = [
     '[data-testid="message-bubble"]',
+    '[class*="message__content"]',
+    '[class*="MessageText"]',
     '[class*="message__bubble"]',
     '[class*="MessageBubble"]',
     '[class*="message-bubble"]',
-    '[class*="Bubble"]',
     '[class*="bubble"]',
+    '[class*="Bubble"]',
+    '[class*="thread__message"]',
     '[class*="Message"] p',
     '[class*="message"] p',
   ];
@@ -167,8 +179,9 @@ export async function readConversation(conversationUrl) {
 
   const itemTitle = await page
     .$eval(
-      '[data-testid="item-title"], [class*="item-title"], [class*="ItemTitle"], ' +
-      '[class*="item_title"], [class*="product-title"], [class*="ProductTitle"]',
+      '[data-testid="item-title"], [class*="ItemTitle"], [class*="item-title"], ' +
+      '[class*="item_title"], [class*="product-title"], [class*="ProductTitle"], ' +
+      '.conversation-header h2, .conversation-header h3, header h2, header h3',
       (el) => el.textContent.trim()
     )
     .catch(() => '');

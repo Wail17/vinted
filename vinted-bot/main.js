@@ -34,10 +34,14 @@ async function processConversation(conv) {
 
   log(`[main] Buyer says: "${latestMessage.slice(0, 100)}"`);
 
-  // Match SOP to item
-  const sop = matchSop(itemTitle || conv.itemTitle);
+  // Match SOP to item — fall back to API last message if DOM title is empty
+  const effectiveTitle  = itemTitle  || conv.lastMessage || '';
+  const effectiveSender = senderName || conv.senderName  || '';
+  log(`[main] effectiveTitle="${effectiveTitle.slice(0, 80)}", effectiveSender="${effectiveSender}"`);
+
+  const sop = matchSop(effectiveTitle);
   if (!sop) {
-    log(`[main] No SOP found for item "${itemTitle}" — skipping.`);
+    log(`[main] No SOP found for item "${effectiveTitle}" — skipping.`);
     return;
   }
 
