@@ -52,14 +52,20 @@ async function processConversation(conv) {
     return;
   }
 
+  // Mark as handled BEFORE sending so a crash or slow API update
+  // on the next poll never triggers a second reply to the same message.
+  markHandled(conv.conversationId, conv.lastMessage);
+
   // Human-like pause before typing
   await randomDelay(1500, 3000);
 
   // Send the reply
   await sendReply(reply);
 
-  // Mark as handled
-  markHandled(conv.conversationId, conv.lastMessage);
+  // Also mark the bot's own reply text as handled. If the API is slow
+  // to update, the next poll may return our reply as conv.lastMessage;
+  // this second key prevents re-processing it.
+  markHandled(conv.conversationId, reply);
   log(`[main] Done with conversation ${conv.conversationId}.`);
 }
 

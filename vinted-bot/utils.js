@@ -63,9 +63,11 @@ export function isHandled(conversationId, description) {
 
 /**
  * Mark a conversation+description as handled so we never reply twice.
+ * saveHandled() uses writeFileSync — the file is persisted to disk
+ * immediately and synchronously before this function returns.
  */
 export function markHandled(conversationId, description) {
   loadHandled();
   handled.add(`${conversationId}:${description}`);
-  saveHandled();
+  saveHandled(); // synchronous write — durably persisted before next poll
 }
