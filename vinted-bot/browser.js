@@ -69,17 +69,58 @@ export async function closeBrowser() {
 }
 
 /**
- * Verify the session is still alive by checking if we are logged in.
- * Returns true if valid, false if session has expired.
+ * Verify the session is still alive by calling the Vinted API directly.
+ * Uses the access_token_web cookie from session.json as a Bearer token.
+ *
+ * - HTTP 200 → valid, returns true
+ * - HTTP 401 → tries refreshSession(); returns true on success, throws SESSION_EXPIRED on failure
+ * - Other errors → returns false (treated as a transient network problem)
  */
 export async function isSessionValid() {
-  try {
-    await page.goto(config.vintedBaseUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+  if (!fs.existsSync(config.sessionFile)) {
+    return false;
+  }
 
-    // Vinted shows a user avatar / profile icon when logged in
-    const loggedIn = await page.$('[data-testid="header--profile-btn"], a[href*="/member"]');
-    return loggedIn !== null;
-  } catch {
+  const storageState = JSON.parse(fs.readFileSync(config.sessionFile, 'utf8'));
+  const accessCookie = storageState.cookies?.find((c) => c.name === 'access_token_web');
+
+  if (!accessCookie?.value) {
+    log('[browser] isSessionValid: access_token_web not found in session.json.');
+    return false;
+  }
+
+  try {
+    const response = await fetch(`${config.vintedBaseUrl}/api/v2/users/current`, {
+      headers: {
+        Authorization: `Bearer ${accessCookie.value}`,
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+          '(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      },
+    });
+
+    if (response.status === 200) {
+      log('[browser] Session check: access token valid (HTTP 200).');
+      return true;
+    }
+
+    if (response.status === 401) {
+      log('[browser] Session check: access token expired (HTTP 401) — attempting refresh…');
+      const refreshed = await refreshSession();
+      if (refreshed) {
+        log('[browser] Token refreshed successfully — session is valid.');
+        return true;
+      }
+      throw new Error(
+        'SESSION_EXPIRED: Refresh token is also invalid. Re-run  node browser.js --save-session  to log in again.'
+      );
+    }
+
+    log(`[browser] Session check: unexpected HTTP ${response.status} — treating as transient error.`);
+    return false;
+  } catch (err) {
+    if (err.message?.includes('SESSION_EXPIRED')) throw err;
+    log(`[browser] Session check fetch error: ${err.message}`);
     return false;
   }
 }

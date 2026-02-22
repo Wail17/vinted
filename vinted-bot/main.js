@@ -169,13 +169,13 @@ async function main() {
 
     log('[main] Entering polling loop…');
 
-    // Refresh the Vinted session token every 6 hours so the bot never
+    // Refresh the Vinted session token every 90 minutes so the bot never
     // gets kicked out mid-run due to an expired access token.
-    const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+    const NINETY_MIN_MS = 90 * 60 * 1000;
     setInterval(async () => {
       log('[main] Scheduled token refresh…');
       await refreshSession();
-    }, SIX_HOURS_MS);
+    }, NINETY_MIN_MS);
 
     const MAX_SESSION_RETRIES = 3;
     const SESSION_RETRY_WAIT_MS = 5 * 60 * 1000; // 5 minutes
