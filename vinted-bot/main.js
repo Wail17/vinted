@@ -2,9 +2,13 @@
 
 import 'dotenv/config';
 import { loadSession, isSessionValid, closeBrowser, refreshSession } from './browser.js';
-import { getUnreadConversations, readConversation, sendReply, acceptOffer } from './messageHandler.js';
+import { getUnreadConversations, readConversation, sendReply, acceptOffer, getCurrentUserId } from './messageHandler.js';
 import { matchSop, getClaudeReply } from './claudeAgent.js';
 import { randomDelay, nextPollInterval, log, isHandled, markHandled } from './utils.js';
+
+// Cached at startup — the seller's own Vinted user id.
+// Used to definitively detect when the last message in a conversation is ours.
+let currentUserId = null;
 
 async function processConversation(conv) {
   // Night mode: no replies between 23:00 and 08:00 Belgium time (UTC+1)
@@ -16,11 +20,12 @@ async function processConversation(conv) {
 
   log(`[main] Processing conversation ${conv.conversationId} with ${conv.senderName}`);
 
-  // API-level check: if the last sender is not the buyer, the last message
-  // is ours — skip immediately without opening the page.
-  if (conv.lastSenderId !== null && conv.oppositeUserId !== null &&
-      conv.lastSenderId !== conv.oppositeUserId) {
-    log(`[main] Last message in ${conv.conversationId} was sent by us (sender ${conv.lastSenderId}) — skipping.`);
+  // Skip conversations where the last message was sent by us.
+  // Compare against currentUserId fetched at startup from /api/v2/users/current —
+  // this is the authoritative check; the opposite_user heuristic was unreliable.
+  if (currentUserId !== null && conv.lastSenderId !== null &&
+      String(conv.lastSenderId) === String(currentUserId)) {
+    log(`[main] Last message in ${conv.conversationId} is ours (userId=${currentUserId}) — skipping.`);
     markHandled(conv.conversationId, conv.lastMessage);
     return;
   }
@@ -155,7 +160,15 @@ async function main() {
     process.exit(1);
   }
 
-  log('[main] Session OK. Entering polling loop…');
+  log('[main] Session OK. Fetching current user id…');
+  currentUserId = await getCurrentUserId();
+  if (currentUserId) {
+    log(`[main] Logged in as userId=${currentUserId}.`);
+  } else {
+    log('[main] WARNING: Could not resolve current user id — bot-reply detection will rely on fallbacks only.');
+  }
+
+  log('[main] Entering polling loop…');
 
   // Refresh the Vinted session token every 6 hours so the bot never
   // gets kicked out mid-run due to an expired access token.

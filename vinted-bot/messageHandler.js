@@ -80,19 +80,65 @@ export async function getUnreadConversations() {
 
   log(`[messageHandler] ${items.length} conversation(s) returned from API.`);
 
-  return items.map((item) => ({
-    conversationId:  String(item.id),
-    conversationUrl: `https://www.vinted.be/inbox/${item.id}`,
-    senderName:      item.opposite_user?.login || '',
-    lastMessage:     item.description || '',
-    // Item title from the API — primary source for SOP matching
-    itemTitle:       item.item?.title || item.item_title || '',
-    // Used to detect whether the last message was sent by us or the buyer:
-    // opposite_user is always the buyer; if lastSenderId !== oppositeUserId
-    // then the last message is ours.
-    oppositeUserId:  item.opposite_user?.id   ?? null,
-    lastSenderId:    item.last_message?.user_id ?? item.last_message?.sender_id ?? null,
-  }));
+  return items.map((item) => {
+    // Log the full last_message object so we can confirm the correct sender field name.
+    log(`[messageHandler] conversation ${item.id} last_message: ${JSON.stringify(item.last_message)}`);
+
+    return {
+      conversationId:  String(item.id),
+      conversationUrl: `https://www.vinted.be/inbox/${item.id}`,
+      senderName:      item.opposite_user?.login || '',
+      lastMessage:     item.description || '',
+      // Item title from the API — primary source for SOP matching
+      itemTitle:       item.item?.title || item.item_title || '',
+      oppositeUserId:  item.opposite_user?.id   ?? null,
+      // Try every known field name Vinted uses for the sender id on last_message
+      lastSenderId:    item.last_message?.user_id
+                    ?? item.last_message?.sender_id
+                    ?? item.last_message?.from_user_id
+                    ?? null,
+    };
+  });
+}
+
+/**
+ * Return the user id of the currently logged-in seller by calling
+ * GET /api/v2/users/current.  Result is a plain number (Vinted user id).
+ * Returns null if the call fails so the caller can decide how to handle it.
+ */
+export async function getCurrentUserId() {
+  const page = getPage();
+  const url = `${config.vintedBaseUrl}/api/v2/users/current`;
+
+  const FETCH_OPTS = {
+    credentials: 'include',
+    headers: {
+      Accept: 'application/json',
+      'X-Requested-With': 'XMLHttpRequest',
+    },
+  };
+
+  log(`[messageHandler] getCurrentUserId: GET ${url}`);
+  const result = await page.evaluate(async ({ url, opts }) => {
+    const r = await fetch(url, opts);
+    const text = await r.text();
+    return { status: r.status, text };
+  }, { url, opts: FETCH_OPTS });
+
+  log(`[messageHandler] getCurrentUserId: status=${result.status}, preview=${result.text.slice(0, 200)}`);
+
+  let data;
+  try {
+    data = JSON.parse(result.text);
+  } catch {
+    log('[messageHandler] getCurrentUserId: non-JSON response — cannot determine current user id.');
+    return null;
+  }
+
+  // Vinted wraps the user under data.user or returns it directly
+  const userId = data.user?.id ?? data.id ?? null;
+  log(`[messageHandler] getCurrentUserId: resolved id=${userId}`);
+  return userId;
 }
 
 /**
