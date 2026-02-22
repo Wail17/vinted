@@ -115,8 +115,8 @@ async function poll() {
 
     for (const conv of conversations) {
       try {
-        // Human-like delay before each conversation (1–3 minutes)
-        const delay = Math.floor(Math.random() * 120000) + 60000;
+        // Human-like delay before each conversation (20–45 seconds)
+        const delay = Math.floor(Math.random() * 25000) + 20000;
         log(`[main] Waiting ${Math.round(delay / 1000)}s before next conversation…`);
         await new Promise((resolve) => setTimeout(resolve, delay));
 
