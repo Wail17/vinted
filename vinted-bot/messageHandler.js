@@ -83,14 +83,23 @@ export async function getUnreadConversations() {
   // Price pattern: matches "27 €", "27,00 €", "27.50 €"
   const PRICE_RE = /(\d+[,.]?\d*)\s*€/;
 
+  // Offer keywords that appear in description when a buyer makes a price offer.
+  // The inbox API does not expose entity_type / offer objects directly, so we
+  // rely on textual signals in the conversation description.
+  const OFFER_KEYWORDS = ['accepterais', 'offre'];
+
   return items.map((item) => {
     // Log the full conversation object so we can see all available fields.
     log(`[messageHandler] conversation ${item.id} full object: ${JSON.stringify(item)}`);
 
-    // Detect a price offer via entity_type on last_message or a price in description.
-    const entityType = item.last_message?.entity_type || '';
-    const isOffer    = entityType === 'offer' || entityType === 'transaction'
-                    || PRICE_RE.test(item.description || '');
+    // Detect a price offer from the description text:
+    //  • contains "accepterais" or "offre" (buyer proposing a price in French), OR
+    //  • contains "€" together with a number (explicit price mention).
+    const desc = (item.description || '').toLowerCase();
+    const isOffer = OFFER_KEYWORDS.some((kw) => desc.includes(kw)) || PRICE_RE.test(desc);
+
+    // Try to parse the offered price directly from the description (best-effort).
+    // acceptOffer() will fetch the authoritative price from the conversation API.
     let offeredPrice = null;
     if (isOffer) {
       const m = PRICE_RE.exec(item.description || '');
@@ -345,16 +354,29 @@ export async function acceptOffer(conversationId, minPrice) {
   log('[messageHandler] acceptOffer: full response: ' + JSON.stringify(convData, null, 2));
 
   // ── Step 2: Extract IDs and price (handle multiple known API shapes) ──────
-  const conv    = convData.conversation ?? convData;
-  const txn     = conv.transaction ?? {};
-  const txnId   = txn.id ?? conv.transaction_id ?? null;
+  //
+  // Try every documented path the Vinted API may use:
+  //   response.conversation.transaction.id
+  //   response.conversation.offer_requests[0].id
+  //   response.transaction.id
+  //   response.offer_requests[0].id
+  const txnId =
+    convData.conversation?.transaction?.id ??
+    convData.transaction?.id ??
+    null;
 
-  // offer_request may be a single object or the first element of an array
-  const offerReq   = txn.offer_request ?? txn.offer_requests?.[0] ?? {};
-  const offerReqId = offerReq.id ?? conv.offer_request_id ?? null;
+  const offerReqId =
+    convData.conversation?.offer_requests?.[0]?.id ??
+    convData.offer_requests?.[0]?.id ??
+    null;
 
-  // price can be a plain number or a { amount, currency_code } object
-  const rawPrice  = offerReq.price?.amount ?? offerReq.price ?? offerReq.amount ?? null;
+  // price can be on the offer_request or on the transaction itself
+  const offerReqObj = convData.conversation?.offer_requests?.[0]
+                   ?? convData.offer_requests?.[0]
+                   ?? convData.conversation?.transaction?.offer_request
+                   ?? convData.conversation?.transaction?.offer_requests?.[0]
+                   ?? {};
+  const rawPrice   = offerReqObj.price?.amount ?? offerReqObj.price ?? offerReqObj.amount ?? null;
   const offerPrice = rawPrice !== null ? parseFloat(rawPrice) : null;
 
   if (!txnId || !offerReqId) {
