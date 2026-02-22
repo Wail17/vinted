@@ -6,6 +6,9 @@ import { getUnreadConversations, readConversation, sendReply, acceptOffer, getCu
 import { matchSop, getClaudeReply } from './claudeAgent.js';
 import { randomDelay, nextPollInterval, log, isHandled, markHandled } from './utils.js';
 
+const MAX_FATAL_RETRIES  = 3;
+const FATAL_RETRY_WAIT_MS = 10 * 60 * 1000; // 10 minutes
+
 // Cached at startup — the seller's own Vinted user id.
 // Used to definitively detect when the last message in a conversation is ours.
 let currentUserId = null;
@@ -135,44 +138,42 @@ async function poll() {
   }
 }
 
-async function main() {
+/**
+ * One full bot lifecycle: load session → polling loop.
+ * Throws on unrecoverable errors so the outer retry wrapper can catch them.
+ */
+async function run() {
   log('[main] Vinted bot starting…');
 
   if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY === 'your_api_key_here') {
-    console.error('[main] ERROR: ANTHROPIC_API_KEY is not set in .env');
-    process.exit(1);
+    throw new Error('ANTHROPIC_API_KEY is not set in .env');
   }
 
+  log('[main] Loading browser session…');
+  await loadSession(); // throws on failure — caught by outer retry loop
+
+  log('[main] Session loaded. Fetching current user id…');
+  currentUserId = getCurrentUserId();
+  log(`[main] Bot identity: userId=${currentUserId ?? 'unknown'}`);
+  if (!currentUserId) {
+    log('[main] WARNING: Could not resolve current user id — bot-reply detection will rely on fallbacks only.');
+  }
+
+  log('[main] Entering polling loop…');
+
+  // Refresh the Vinted session token every 90 minutes so the bot never
+  // gets kicked out mid-run due to an expired access token.
+  const NINETY_MIN_MS = 90 * 60 * 1000;
+  const refreshTimer = setInterval(async () => {
+    log('[main] Scheduled token refresh…');
+    await refreshSession();
+  }, NINETY_MIN_MS);
+
+  const MAX_SESSION_RETRIES  = 3;
+  const SESSION_RETRY_WAIT_MS = 5 * 60 * 1000; // 5 minutes
+  let sessionRetries = 0;
+
   try {
-    log('[main] Loading browser session…');
-    try {
-      await loadSession();
-    } catch (err) {
-      log(`[main] FATAL: ${err.message}`);
-      process.exit(1);
-    }
-
-    log('[main] Session loaded. Fetching current user id…');
-    currentUserId = await getCurrentUserId();
-    log(`[main] Bot identity: userId=${currentUserId ?? 'unknown'}`);
-    if (!currentUserId) {
-      log('[main] WARNING: Could not resolve current user id — bot-reply detection will rely on fallbacks only.');
-    }
-
-    log('[main] Entering polling loop…');
-
-    // Refresh the Vinted session token every 90 minutes so the bot never
-    // gets kicked out mid-run due to an expired access token.
-    const NINETY_MIN_MS = 90 * 60 * 1000;
-    setInterval(async () => {
-      log('[main] Scheduled token refresh…');
-      await refreshSession();
-    }, NINETY_MIN_MS);
-
-    const MAX_SESSION_RETRIES = 3;
-    const SESSION_RETRY_WAIT_MS = 5 * 60 * 1000; // 5 minutes
-    let sessionRetries = 0;
-
     while (true) {
       try {
         await poll();
@@ -181,9 +182,11 @@ async function main() {
         if (err.message?.includes('SESSION_EXPIRED') || err.message?.includes('net::ERR')) {
           sessionRetries++;
           if (sessionRetries >= MAX_SESSION_RETRIES) {
-            log(`[main] Session error ${sessionRetries}/${MAX_SESSION_RETRIES} times in a row — giving up. Re-run  node browser.js --save-session  then restart.`);
             await closeBrowser();
-            process.exit(1);
+            throw new Error(
+              `Session error ${sessionRetries}/${MAX_SESSION_RETRIES} times in a row — ` +
+              're-run  node browser.js --save-session  then restart.'
+            );
           }
           log(`[main] Session error (attempt ${sessionRetries}/${MAX_SESSION_RETRIES}): ${err.message} — waiting 5 min before retry…`);
           await new Promise((resolve) => setTimeout(resolve, SESSION_RETRY_WAIT_MS));
@@ -196,10 +199,27 @@ async function main() {
       log(`[main] Next poll in ${Math.round(wait / 1000)}s.`);
       await new Promise((resolve) => setTimeout(resolve, wait));
     }
-  } catch (err) {
-    log(`[main] Fatal uncaught error: ${err.message}\n${err.stack}`);
-    process.exit(1);
+  } finally {
+    clearInterval(refreshTimer);
   }
+}
+
+async function main() {
+  for (let attempt = 1; attempt <= MAX_FATAL_RETRIES; attempt++) {
+    try {
+      await run();
+      return; // run() loops forever; reaching here means a clean exit
+    } catch (err) {
+      log(`[main] Fatal error (attempt ${attempt}/${MAX_FATAL_RETRIES}): ${err.message}\n${err.stack}`);
+      if (attempt < MAX_FATAL_RETRIES) {
+        log(`[main] Waiting 10 minutes before retry…`);
+        await new Promise((resolve) => setTimeout(resolve, FATAL_RETRY_WAIT_MS));
+      }
+    }
+  }
+
+  log(`[main] All ${MAX_FATAL_RETRIES} attempts exhausted — exiting cleanly.`);
+  // Natural process exit — no process.exit() needed.
 }
 
 main();
