@@ -2,7 +2,7 @@
 
 import 'dotenv/config';
 import { loadSession, isSessionValid, closeBrowser, refreshSession } from './browser.js';
-import { getUnreadConversations, readConversation, sendReply } from './messageHandler.js';
+import { getUnreadConversations, readConversation, sendReply, acceptOffer } from './messageHandler.js';
 import { matchSop, getClaudeReply } from './claudeAgent.js';
 import { randomDelay, nextPollInterval, log, isHandled, markHandled } from './utils.js';
 
@@ -67,6 +67,21 @@ async function processConversation(conv) {
   if (!reply) {
     log(`[main] Claude returned an empty reply — skipping.`);
     return;
+  }
+
+  // Accept offer if one is pending and the offered price meets the SOP minimum.
+  // This runs before sending the reply so the acceptance is registered first.
+  try {
+    const offer = await acceptOffer(conv.conversationId, sop.price_minimum);
+    if (offer.offerPrice !== null) {
+      if (offer.accepted) {
+        log(`[main] Offer of €${offer.offerPrice} accepted for conversation ${conv.conversationId}.`);
+      } else {
+        log(`[main] Offer of €${offer.offerPrice} is below minimum €${sop.price_minimum} — not accepting.`);
+      }
+    }
+  } catch (err) {
+    log(`[main] acceptOffer error (non-fatal): ${err.message}`);
   }
 
   // Mark as handled BEFORE sending so a crash or slow API update

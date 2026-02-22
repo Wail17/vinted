@@ -250,6 +250,98 @@ export async function readConversation(conversationUrl) {
 }
 
 /**
+ * Accept a pending offer on a conversation if the offered price meets the
+ * minimum acceptable price from the SOP.
+ *
+ * Steps:
+ *  1. GET /api/v2/conversations/{conversationId} → extract transaction_id,
+ *     offer_request_id, and the offered price.
+ *  2. If offerPrice >= minPrice, PUT …/accept with an empty body {}.
+ *
+ * Returns { offerPrice, transactionId, offerRequestId, accepted, error? }.
+ * Returns { offerPrice: null, accepted: false } when no active offer is found.
+ *
+ * @param {string|number} conversationId
+ * @param {number}        minPrice  — sop.price_minimum; offer must be >= this
+ */
+export async function acceptOffer(conversationId, minPrice) {
+  const page = getPage();
+  const baseUrl = config.vintedBaseUrl;
+
+  const FETCH_OPTS = {
+    credentials: 'include',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-Requested-With': 'XMLHttpRequest',
+    },
+  };
+
+  // ── Step 1: GET conversation details ──────────────────────────────────────
+  const convUrl = `${baseUrl}/api/v2/conversations/${conversationId}`;
+  log(`[messageHandler] acceptOffer: GET ${convUrl}`);
+
+  const convResult = await page.evaluate(async ({ url, opts }) => {
+    const r = await fetch(url, opts);
+    const text = await r.text();
+    return { status: r.status, text };
+  }, { url: convUrl, opts: FETCH_OPTS });
+
+  log(`[messageHandler] acceptOffer: GET status=${convResult.status}, preview=${convResult.text.slice(0, 300)}`);
+
+  let convData;
+  try {
+    convData = JSON.parse(convResult.text);
+  } catch {
+    log('[messageHandler] acceptOffer: non-JSON response — cannot extract offer details.');
+    return { offerPrice: null, accepted: false, error: 'non-JSON response' };
+  }
+
+  log('[messageHandler] acceptOffer: full response: ' + JSON.stringify(convData, null, 2));
+
+  // ── Step 2: Extract IDs and price (handle multiple known API shapes) ──────
+  const conv    = convData.conversation ?? convData;
+  const txn     = conv.transaction ?? {};
+  const txnId   = txn.id ?? conv.transaction_id ?? null;
+
+  // offer_request may be a single object or the first element of an array
+  const offerReq   = txn.offer_request ?? txn.offer_requests?.[0] ?? {};
+  const offerReqId = offerReq.id ?? conv.offer_request_id ?? null;
+
+  // price can be a plain number or a { amount, currency_code } object
+  const rawPrice  = offerReq.price?.amount ?? offerReq.price ?? offerReq.amount ?? null;
+  const offerPrice = rawPrice !== null ? parseFloat(rawPrice) : null;
+
+  if (!txnId || !offerReqId) {
+    log(`[messageHandler] acceptOffer: no active offer/transaction in conversation ${conversationId}.`);
+    return { offerPrice, accepted: false };
+  }
+
+  log(`[messageHandler] acceptOffer: transactionId=${txnId}, offerRequestId=${offerReqId}, offerPrice=€${offerPrice}`);
+
+  // Price guard — only accept if the offer meets the SOP minimum
+  if (minPrice !== undefined && offerPrice !== null && offerPrice < minPrice) {
+    log(`[messageHandler] acceptOffer: €${offerPrice} < minimum €${minPrice} — skipping PUT.`);
+    return { offerPrice, transactionId: txnId, offerRequestId: offerReqId, accepted: false };
+  }
+
+  // ── Step 3: PUT …/accept ──────────────────────────────────────────────────
+  const acceptUrl = `${baseUrl}/api/v2/transactions/${txnId}/offer_requests/${offerReqId}/accept`;
+  log(`[messageHandler] acceptOffer: PUT ${acceptUrl}`);
+
+  const acceptResult = await page.evaluate(async ({ url, opts }) => {
+    const r = await fetch(url, { ...opts, method: 'PUT', body: JSON.stringify({}) });
+    const text = await r.text();
+    return { status: r.status, text };
+  }, { url: acceptUrl, opts: FETCH_OPTS });
+
+  log(`[messageHandler] acceptOffer: PUT status=${acceptResult.status}, response=${acceptResult.text.slice(0, 300)}`);
+
+  const accepted = acceptResult.status >= 200 && acceptResult.status < 300;
+  return { offerPrice, transactionId: txnId, offerRequestId: offerReqId, accepted };
+}
+
+/**
  * Type and send a reply in the currently open conversation.
  */
 export async function sendReply(replyText) {
