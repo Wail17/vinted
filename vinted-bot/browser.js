@@ -88,8 +88,8 @@ export async function refreshSession() {
     return false;
   }
 
-  const storageState = JSON.parse(fs.readFileSync(config.sessionFile, 'utf8'));
-  const refreshCookie = storageState.cookies?.find((c) => c.name === 'refresh_token_web');
+  const sessionData = JSON.parse(fs.readFileSync(config.sessionFile, 'utf8'));
+  const refreshCookie = sessionData.cookies?.find((c) => c.name === 'refresh_token_web');
 
   if (!refreshCookie?.value) {
     log('[browser] refreshSession: refresh_token_web cookie not found — skipping.');
@@ -114,18 +114,18 @@ export async function refreshSession() {
 
     // Patch the access_token_web and refresh_token_web cookies in the stored state
     const upsertCookie = (name, value) => {
-      const idx = storageState.cookies.findIndex((c) => c.name === name);
+      const idx = sessionData.cookies.findIndex((c) => c.name === name);
       if (idx >= 0) {
-        storageState.cookies[idx] = { ...storageState.cookies[idx], value };
+        sessionData.cookies[idx] = { ...sessionData.cookies[idx], value };
       } else {
-        storageState.cookies.push({ name, value, domain, path: '/', httpOnly: true, secure: true, sameSite: 'Lax' });
+        sessionData.cookies.push({ name, value, domain, path: '/', httpOnly: true, secure: true, sameSite: 'Lax' });
       }
     };
 
     if (data.access_token)  upsertCookie('access_token_web',  data.access_token);
     if (data.refresh_token) upsertCookie('refresh_token_web', data.refresh_token);
 
-    fs.writeFileSync(config.sessionFile, JSON.stringify(storageState, null, 2), 'utf8');
+    fs.writeFileSync(config.sessionFile, JSON.stringify(sessionData, null, 2), 'utf8');
 
     // Also push the new cookies into the live browser context so the running
     // session benefits immediately without needing a restart.
