@@ -38,7 +38,7 @@ export async function getUnreadConversations() {
   // Load the inbox page first so that all session cookies are live in the
   // browser context before we make the API call.
   log(`[messageHandler] Navigating to ${config.vintedInboxUrl} to warm up session…`);
-  await page.goto(config.vintedInboxUrl, { waitUntil: 'networkidle', timeout: 30000 });
+  await page.goto(config.vintedInboxUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await randomDelay(1000, 2000);
 
   if (config.debugInbox) await debugInbox();
@@ -142,7 +142,7 @@ export async function getConversationMessages(conversationId) {
  */
 export async function readConversation(conversationUrl) {
   const page = getPage();
-  await page.goto(conversationUrl, { waitUntil: 'networkidle', timeout: 30000 });
+  await page.goto(conversationUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await randomDelay();
 
   // Debug: log class names of first 3 candidate message elements to identify real selectors
