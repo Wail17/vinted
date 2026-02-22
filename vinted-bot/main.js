@@ -70,6 +70,48 @@ async function processConversation(conv) {
     return;
   }
 
+  // ── Offer fast-path ───────────────────────────────────────────────────────
+  // When the last action is a price offer we handle it directly without Claude.
+  if (conv.isOffer) {
+    const offered = conv.offeredPrice;
+    log(`[main] Price offer detected in conversation ${conv.conversationId}: €${offered ?? 'unknown'}, minimum: €${sop.price_minimum}`);
+
+    if (offered !== null && offered >= sop.price_minimum) {
+      // Offer meets the minimum — accept via API.
+      log(`[main] Offer €${offered} >= minimum €${sop.price_minimum} — accepting.`);
+      try {
+        const result = await acceptOffer(conv.conversationId, sop.price_minimum);
+        if (result.accepted) {
+          log(`[main] Offer accepted for conversation ${conv.conversationId}.`);
+        } else {
+          log(`[main] acceptOffer returned accepted=false (API may have already processed it).`);
+        }
+      } catch (err) {
+        log(`[main] acceptOffer error: ${err.message}`);
+      }
+      markHandled(conv.conversationId, conv.lastMessage);
+      log(`[main] Done with offer conversation ${conv.conversationId}.`);
+      return;
+    }
+
+    if (offered !== null && offered < sop.price_minimum) {
+      // Offer below minimum — send a counter-offer message, skip Claude.
+      const counter = `Non désolé, minimum ${sop.price_minimum}€`;
+      log(`[main] Offer €${offered} < minimum €${sop.price_minimum} — sending counter: "${counter}"`);
+      markHandled(conv.conversationId, conv.lastMessage);
+      await randomDelay(1500, 3000);
+      await sendReply(counter);
+      markHandled(conv.conversationId, counter);
+      log(`[main] Done with offer conversation ${conv.conversationId}.`);
+      return;
+    }
+
+    // offeredPrice is null (entity_type hinted offer but no price in description) —
+    // fall through so acceptOffer() below can fetch the price from the API.
+    log(`[main] Offer detected but price unclear — falling through to API acceptOffer.`);
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   // Get Claude's reply
   const reply = await getClaudeReply(sop, messages, latestMessage);
   if (!reply) {

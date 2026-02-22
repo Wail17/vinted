@@ -80,9 +80,22 @@ export async function getUnreadConversations() {
 
   log(`[messageHandler] ${items.length} conversation(s) returned from API.`);
 
+  // Price pattern: matches "27 €", "27,00 €", "27.50 €"
+  const PRICE_RE = /(\d+[,.]?\d*)\s*€/;
+
   return items.map((item) => {
-    // Log the full last_message object so we can confirm the correct sender field name.
-    log(`[messageHandler] conversation ${item.id} last_message: ${JSON.stringify(item.last_message)}`);
+    // Log the full conversation object so we can see all available fields.
+    log(`[messageHandler] conversation ${item.id} full object: ${JSON.stringify(item)}`);
+
+    // Detect a price offer via entity_type on last_message or a price in description.
+    const entityType = item.last_message?.entity_type || '';
+    const isOffer    = entityType === 'offer' || entityType === 'transaction'
+                    || PRICE_RE.test(item.description || '');
+    let offeredPrice = null;
+    if (isOffer) {
+      const m = PRICE_RE.exec(item.description || '');
+      if (m) offeredPrice = parseFloat(m[1].replace(',', '.'));
+    }
 
     return {
       conversationId:  String(item.id),
@@ -97,6 +110,9 @@ export async function getUnreadConversations() {
                     ?? item.last_message?.sender_id
                     ?? item.last_message?.from_user_id
                     ?? null,
+      // Offer detection
+      isOffer,
+      offeredPrice,
     };
   });
 }
