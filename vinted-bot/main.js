@@ -7,6 +7,13 @@ import { matchSop, getClaudeReply } from './claudeAgent.js';
 import { randomDelay, nextPollInterval, log, isHandled, markHandled } from './utils.js';
 
 async function processConversation(conv) {
+  // Night mode: no replies between 23:00 and 08:00 Belgium time (UTC+1)
+  const hour = new Date().getUTCHours() + 1;
+  if (hour >= 23 || hour < 8) {
+    log('[main] Night mode — skipping replies until 08:00');
+    return;
+  }
+
   log(`[main] Processing conversation ${conv.conversationId} with ${conv.senderName}`);
 
   // Deduplicate: skip if we already handled this exact last message
@@ -78,6 +85,11 @@ async function poll() {
 
     for (const conv of conversations) {
       try {
+        // Human-like delay before each conversation (1–3 minutes)
+        const delay = Math.floor(Math.random() * 120000) + 60000;
+        log(`[main] Waiting ${Math.round(delay / 1000)}s before next conversation…`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+
         await processConversation(conv);
         // Small pause between conversations — never act on two at once
         await randomDelay(2000, 4000);
