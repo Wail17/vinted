@@ -102,43 +102,26 @@ export async function getUnreadConversations() {
 }
 
 /**
- * Return the user id of the currently logged-in seller by calling
- * GET /api/v2/users/current.  Result is a plain number (Vinted user id).
- * Returns null if the call fails so the caller can decide how to handle it.
+ * Return the user id of the currently logged-in seller by decoding the
+ * access_token_web JWT stored in session.json.  No network call needed.
+ * Returns null if the token is missing or cannot be decoded.
  */
-export async function getCurrentUserId() {
-  const page = getPage();
-  const url = `${config.vintedBaseUrl}/api/v2/users/current`;
-
-  const FETCH_OPTS = {
-    credentials: 'include',
-    headers: {
-      Accept: 'application/json',
-      'X-Requested-With': 'XMLHttpRequest',
-    },
-  };
-
-  log(`[messageHandler] getCurrentUserId: GET ${url}`);
-  const result = await page.evaluate(async ({ url, opts }) => {
-    const r = await fetch(url, opts);
-    const text = await r.text();
-    return { status: r.status, text };
-  }, { url, opts: FETCH_OPTS });
-
-  log(`[messageHandler] getCurrentUserId: status=${result.status}, preview=${result.text.slice(0, 200)}`);
-
-  let data;
+export function getCurrentUserId() {
   try {
-    data = JSON.parse(result.text);
-  } catch {
-    log('[messageHandler] getCurrentUserId: non-JSON response — cannot determine current user id.');
+    const session = JSON.parse(fs.readFileSync(config.sessionFile, 'utf8'));
+    const token = session.cookies?.find((c) => c.name === 'access_token_web')?.value;
+    if (!token) {
+      log('[messageHandler] getCurrentUserId: access_token_web not found in session.json.');
+      return null;
+    }
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+    const userId = payload.sub ?? null;
+    log(`[messageHandler] getCurrentUserId: decoded userId=${userId}`);
+    return userId;
+  } catch (err) {
+    log(`[messageHandler] getCurrentUserId: failed to decode JWT — ${err.message}`);
     return null;
   }
-
-  // Vinted wraps the user under data.user or returns it directly
-  const userId = data.user?.id ?? data.id ?? null;
-  log(`[messageHandler] getCurrentUserId: resolved id=${userId}`);
-  return userId;
 }
 
 /**
