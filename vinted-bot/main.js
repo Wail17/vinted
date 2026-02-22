@@ -14,12 +14,13 @@ const FATAL_RETRY_WAIT_MS = 10 * 60 * 1000; // 10 minutes
 let currentUserId = null;
 
 async function processConversation(conv) {
+  // TODO: re-enable night mode when ready
   // Night mode: no replies between 23:00 and 08:00 Belgium time (UTC+1)
-  const hour = new Date().getUTCHours() + 1;
-  if (hour >= 23 || hour < 8) {
-    log('[main] Night mode — skipping replies until 08:00');
-    return;
-  }
+  // const hour = new Date().getUTCHours() + 1;
+  // if (hour >= 23 || hour < 8) {
+  //   log('[main] Night mode — skipping replies until 08:00');
+  //   return;
+  // }
 
   log(`[main] Processing conversation ${conv.conversationId} with ${conv.senderName}`);
 
