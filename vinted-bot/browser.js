@@ -39,7 +39,6 @@ export async function loadSession() {
       password: process.env.PROXY_PASSWORD,
     },
   });
-  const storageState = JSON.parse(fs.readFileSync(config.sessionFile, 'utf8'));
   context = await browser.newContext({
     storageState,
     userAgent:
