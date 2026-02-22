@@ -1,7 +1,7 @@
 // main.js — orchestrator: polling loop that ties everything together
 
 import 'dotenv/config';
-import { loadSession, isSessionValid, closeBrowser, refreshSession } from './browser.js';
+import { loadSession, closeBrowser, refreshSession } from './browser.js';
 import { getUnreadConversations, readConversation, sendReply, acceptOffer, getCurrentUserId } from './messageHandler.js';
 import { matchSop, getClaudeReply } from './claudeAgent.js';
 import { randomDelay, nextPollInterval, log, isHandled, markHandled } from './utils.js';
@@ -152,15 +152,7 @@ async function main() {
       process.exit(1);
     }
 
-    // Verify session is still alive
-    const valid = await isSessionValid();
-    if (!valid) {
-      log('[main] FATAL: Session appears to be expired. Run  node browser.js --save-session  to refresh.');
-      await closeBrowser();
-      process.exit(1);
-    }
-
-    log('[main] Session OK. Fetching current user id…');
+    log('[main] Session loaded. Fetching current user id…');
     currentUserId = await getCurrentUserId();
     log(`[main] Bot identity: userId=${currentUserId ?? 'unknown'}`);
     if (!currentUserId) {

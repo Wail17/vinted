@@ -13,12 +13,21 @@ let page = null;
 
 /**
  * Load a saved Playwright browser context from the session file.
- * Throws SESSION_EXPIRED if the file is missing or the session is invalid.
+ * Throws SESSION_EXPIRED if the file is missing or has no refresh_token_web cookie.
+ * Actual token validity is discovered lazily — the polling loop handles expiry.
  */
 export async function loadSession() {
   if (!fs.existsSync(config.sessionFile)) {
     throw new Error(
       'SESSION_EXPIRED: No session file found. Run  node browser.js --save-session  to log in manually.'
+    );
+  }
+
+  const storageState = JSON.parse(fs.readFileSync(config.sessionFile, 'utf8'));
+  const hasRefreshToken = storageState.cookies?.some((c) => c.name === 'refresh_token_web' && c.value);
+  if (!hasRefreshToken) {
+    throw new Error(
+      'SESSION_EXPIRED: session.json has no refresh_token_web cookie. Run  node browser.js --save-session  to log in again.'
     );
   }
 
@@ -65,54 +74,6 @@ export async function closeBrowser() {
     browser = null;
     context = null;
     page = null;
-  }
-}
-
-/**
- * Verify the session is still alive by making an API call from inside the
- * Playwright browser context (which already has the proxy and cookies set up).
- * Uses page.evaluate() so the request travels through the same proxy as all
- * other browser traffic.
- *
- * - HTTP 200 → valid, returns true
- * - HTTP 401 → tries refreshSession(); returns true on success, throws SESSION_EXPIRED on failure
- * - Other errors → returns false (treated as a transient network problem)
- */
-export async function isSessionValid() {
-  if (!page) {
-    log('[browser] isSessionValid: no active page — session not loaded.');
-    return false;
-  }
-
-  try {
-    const status = await page.evaluate(async (url) => {
-      const res = await fetch(url, { credentials: 'include' });
-      return res.status;
-    }, `${config.vintedBaseUrl}/api/v2/users/current`);
-
-    if (status === 200) {
-      log('[browser] Session check: valid (HTTP 200).');
-      return true;
-    }
-
-    if (status === 401) {
-      log('[browser] Session check: access token expired (HTTP 401) — attempting refresh…');
-      const refreshed = await refreshSession();
-      if (refreshed) {
-        log('[browser] Token refreshed successfully — session is valid.');
-        return true;
-      }
-      throw new Error(
-        'SESSION_EXPIRED: Refresh token is also invalid. Re-run  node browser.js --save-session  to log in again.'
-      );
-    }
-
-    log(`[browser] Session check: unexpected HTTP ${status} — treating as transient error.`);
-    return false;
-  } catch (err) {
-    if (err.message?.includes('SESSION_EXPIRED')) throw err;
-    log(`[browser] Session check error: ${err.message}`);
-    return false;
   }
 }
 
