@@ -86,7 +86,7 @@ export async function getUnreadConversations() {
   // Offer keywords that appear in description when a buyer makes a price offer.
   // The inbox API does not expose entity_type / offer objects directly, so we
   // rely on textual signals in the conversation description.
-  const OFFER_KEYWORDS = ['accepterais', 'offre'];
+  const OFFER_KEYWORDS = ['accepterais', "t'a fait une offre"];
 
   return items.map((item) => {
     // Log the full conversation object so we can see all available fields.
@@ -353,34 +353,34 @@ export async function acceptOffer(conversationId, minPrice) {
 
   log('[messageHandler] acceptOffer: full response: ' + JSON.stringify(convData, null, 2));
 
-  // ── Step 2: Extract IDs and price (handle multiple known API shapes) ──────
+  // ── Step 2: Find the active, pending offer_request_message ──────────────
   //
-  // Try every documented path the Vinted API may use:
-  //   response.conversation.transaction.id
-  //   response.conversation.offer_requests[0].id
-  //   response.transaction.id
-  //   response.offer_requests[0].id
-  const txnId =
-    convData.conversation?.transaction?.id ??
-    convData.transaction?.id ??
-    null;
+  // From GET /api/v2/conversations/{id} we look through the messages array for
+  // an entry where:
+  //   • entity_type === "offer_request_message"
+  //   • entity.current === true   (most recent offer round)
+  //   • entity.status  === 10     (10 = pending, waiting for seller acceptance)
+  const messages = convData.conversation?.messages ?? [];
+  const offerMsg = messages.find(
+    (m) =>
+      m.entity_type === 'offer_request_message' &&
+      m.entity?.current === true &&
+      m.entity?.status  === 10,
+  );
 
-  const offerReqId =
-    convData.conversation?.offer_requests?.[0]?.id ??
-    convData.offer_requests?.[0]?.id ??
-    null;
+  if (!offerMsg) {
+    log(`[messageHandler] acceptOffer: no pending offer_request_message in conversation ${conversationId}.`);
+    return { offerPrice: null, accepted: false };
+  }
 
-  // price can be on the offer_request or on the transaction itself
-  const offerReqObj = convData.conversation?.offer_requests?.[0]
-                   ?? convData.offer_requests?.[0]
-                   ?? convData.conversation?.transaction?.offer_request
-                   ?? convData.conversation?.transaction?.offer_requests?.[0]
-                   ?? {};
-  const rawPrice   = offerReqObj.price?.amount ?? offerReqObj.price ?? offerReqObj.amount ?? null;
-  const offerPrice = rawPrice !== null ? parseFloat(rawPrice) : null;
+  const txnId      = offerMsg.entity.transaction_id   ?? null;
+  const offerReqId = offerMsg.entity.offer_request_id ?? null;
+  const offerPrice = offerMsg.entity.price?.amount !== undefined
+    ? parseFloat(offerMsg.entity.price.amount)
+    : null;
 
   if (!txnId || !offerReqId) {
-    log(`[messageHandler] acceptOffer: no active offer/transaction in conversation ${conversationId}.`);
+    log(`[messageHandler] acceptOffer: offer message found but missing transaction_id or offer_request_id.`);
     return { offerPrice, accepted: false };
   }
 
