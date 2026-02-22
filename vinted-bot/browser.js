@@ -69,42 +69,33 @@ export async function closeBrowser() {
 }
 
 /**
- * Verify the session is still alive by calling the Vinted API directly.
- * Uses the access_token_web cookie from session.json as a Bearer token.
+ * Verify the session is still alive by making an API call from inside the
+ * Playwright browser context (which already has the proxy and cookies set up).
+ * Uses page.evaluate() so the request travels through the same proxy as all
+ * other browser traffic.
  *
  * - HTTP 200 → valid, returns true
  * - HTTP 401 → tries refreshSession(); returns true on success, throws SESSION_EXPIRED on failure
  * - Other errors → returns false (treated as a transient network problem)
  */
 export async function isSessionValid() {
-  if (!fs.existsSync(config.sessionFile)) {
-    return false;
-  }
-
-  const storageState = JSON.parse(fs.readFileSync(config.sessionFile, 'utf8'));
-  const accessCookie = storageState.cookies?.find((c) => c.name === 'access_token_web');
-
-  if (!accessCookie?.value) {
-    log('[browser] isSessionValid: access_token_web not found in session.json.');
+  if (!page) {
+    log('[browser] isSessionValid: no active page — session not loaded.');
     return false;
   }
 
   try {
-    const response = await fetch(`${config.vintedBaseUrl}/api/v2/users/current`, {
-      headers: {
-        Authorization: `Bearer ${accessCookie.value}`,
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-          '(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-      },
-    });
+    const status = await page.evaluate(async (url) => {
+      const res = await fetch(url, { credentials: 'include' });
+      return res.status;
+    }, `${config.vintedBaseUrl}/api/v2/users/current`);
 
-    if (response.status === 200) {
-      log('[browser] Session check: access token valid (HTTP 200).');
+    if (status === 200) {
+      log('[browser] Session check: valid (HTTP 200).');
       return true;
     }
 
-    if (response.status === 401) {
+    if (status === 401) {
       log('[browser] Session check: access token expired (HTTP 401) — attempting refresh…');
       const refreshed = await refreshSession();
       if (refreshed) {
@@ -116,11 +107,11 @@ export async function isSessionValid() {
       );
     }
 
-    log(`[browser] Session check: unexpected HTTP ${response.status} — treating as transient error.`);
+    log(`[browser] Session check: unexpected HTTP ${status} — treating as transient error.`);
     return false;
   } catch (err) {
     if (err.message?.includes('SESSION_EXPIRED')) throw err;
-    log(`[browser] Session check fetch error: ${err.message}`);
+    log(`[browser] Session check error: ${err.message}`);
     return false;
   }
 }
