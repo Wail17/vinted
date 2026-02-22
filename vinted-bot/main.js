@@ -143,56 +143,70 @@ async function main() {
     process.exit(1);
   }
 
-  log('[main] Loading browser session…');
-  let page;
   try {
-    page = await loadSession();
-  } catch (err) {
-    log(`[main] FATAL: ${err.message}`);
-    process.exit(1);
-  }
-
-  // Verify session is still alive
-  const valid = await isSessionValid();
-  if (!valid) {
-    log('[main] FATAL: Session appears to be expired. Run  node browser.js --save-session  to refresh.');
-    await closeBrowser();
-    process.exit(1);
-  }
-
-  log('[main] Session OK. Fetching current user id…');
-  currentUserId = await getCurrentUserId();
-  if (currentUserId) {
-    log(`[main] Logged in as userId=${currentUserId}.`);
-  } else {
-    log('[main] WARNING: Could not resolve current user id — bot-reply detection will rely on fallbacks only.');
-  }
-
-  log('[main] Entering polling loop…');
-
-  // Refresh the Vinted session token every 6 hours so the bot never
-  // gets kicked out mid-run due to an expired access token.
-  const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
-  setInterval(async () => {
-    log('[main] Scheduled token refresh…');
-    await refreshSession();
-  }, SIX_HOURS_MS);
-
-  while (true) {
+    log('[main] Loading browser session…');
     try {
-      await poll();
+      await loadSession();
     } catch (err) {
-      if (err.message?.includes('SESSION_EXPIRED')) {
-        log('[main] Session expired during poll. Stopping. Re-run  node browser.js --save-session  then restart.');
-        await closeBrowser();
-        process.exit(1);
-      }
-      log(`[main] Unexpected error: ${err.message}`);
+      log(`[main] FATAL: ${err.message}`);
+      process.exit(1);
     }
 
-    const wait = nextPollInterval();
-    log(`[main] Next poll in ${Math.round(wait / 1000)}s.`);
-    await new Promise((resolve) => setTimeout(resolve, wait));
+    // Verify session is still alive
+    const valid = await isSessionValid();
+    if (!valid) {
+      log('[main] FATAL: Session appears to be expired. Run  node browser.js --save-session  to refresh.');
+      await closeBrowser();
+      process.exit(1);
+    }
+
+    log('[main] Session OK. Fetching current user id…');
+    currentUserId = await getCurrentUserId();
+    log(`[main] Bot identity: userId=${currentUserId ?? 'unknown'}`);
+    if (!currentUserId) {
+      log('[main] WARNING: Could not resolve current user id — bot-reply detection will rely on fallbacks only.');
+    }
+
+    log('[main] Entering polling loop…');
+
+    // Refresh the Vinted session token every 6 hours so the bot never
+    // gets kicked out mid-run due to an expired access token.
+    const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+    setInterval(async () => {
+      log('[main] Scheduled token refresh…');
+      await refreshSession();
+    }, SIX_HOURS_MS);
+
+    const MAX_SESSION_RETRIES = 3;
+    const SESSION_RETRY_WAIT_MS = 5 * 60 * 1000; // 5 minutes
+    let sessionRetries = 0;
+
+    while (true) {
+      try {
+        await poll();
+        sessionRetries = 0; // reset on a clean poll
+      } catch (err) {
+        if (err.message?.includes('SESSION_EXPIRED') || err.message?.includes('net::ERR')) {
+          sessionRetries++;
+          if (sessionRetries >= MAX_SESSION_RETRIES) {
+            log(`[main] Session error ${sessionRetries}/${MAX_SESSION_RETRIES} times in a row — giving up. Re-run  node browser.js --save-session  then restart.`);
+            await closeBrowser();
+            process.exit(1);
+          }
+          log(`[main] Session error (attempt ${sessionRetries}/${MAX_SESSION_RETRIES}): ${err.message} — waiting 5 min before retry…`);
+          await new Promise((resolve) => setTimeout(resolve, SESSION_RETRY_WAIT_MS));
+          continue; // skip the normal inter-poll wait
+        }
+        log(`[main] Unexpected poll error: ${err.message}`);
+      }
+
+      const wait = nextPollInterval();
+      log(`[main] Next poll in ${Math.round(wait / 1000)}s.`);
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+  } catch (err) {
+    log(`[main] Fatal uncaught error: ${err.message}\n${err.stack}`);
+    process.exit(1);
   }
 }
 
