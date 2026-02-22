@@ -85,6 +85,13 @@ export async function getUnreadConversations() {
     conversationUrl: `https://www.vinted.be/inbox/${item.id}`,
     senderName:      item.opposite_user?.login || '',
     lastMessage:     item.description || '',
+    // Item title from the API — primary source for SOP matching
+    itemTitle:       item.item?.title || item.item_title || '',
+    // Used to detect whether the last message was sent by us or the buyer:
+    // opposite_user is always the buyer; if lastSenderId !== oppositeUserId
+    // then the last message is ours.
+    oppositeUserId:  item.opposite_user?.id   ?? null,
+    lastSenderId:    item.last_message?.user_id ?? item.last_message?.sender_id ?? null,
   }));
 }
 

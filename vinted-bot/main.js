@@ -16,6 +16,15 @@ async function processConversation(conv) {
 
   log(`[main] Processing conversation ${conv.conversationId} with ${conv.senderName}`);
 
+  // API-level check: if the last sender is not the buyer, the last message
+  // is ours — skip immediately without opening the page.
+  if (conv.lastSenderId !== null && conv.oppositeUserId !== null &&
+      conv.lastSenderId !== conv.oppositeUserId) {
+    log(`[main] Last message in ${conv.conversationId} was sent by us (sender ${conv.lastSenderId}) — skipping.`);
+    markHandled(conv.conversationId, conv.lastMessage);
+    return;
+  }
+
   // Deduplicate: skip if we already handled this exact last message
   if (isHandled(conv.conversationId, conv.lastMessage)) {
     log(`[main] Already handled conversation ${conv.conversationId} ("${conv.lastMessage.slice(0, 60)}") — skipping.`);
@@ -32,17 +41,18 @@ async function processConversation(conv) {
   }
   const latestMessage = buyerMessages[buyerMessages.length - 1].text;
 
-  // Make sure the last message is not ours (avoid replying to ourselves)
+  // DOM-level safety net: confirm the last scraped message isn't ours
   if (messages[messages.length - 1]?.author === 'me') {
-    log(`[main] Last message is ours — skipping conversation ${conv.conversationId}.`);
+    log(`[main] Last DOM message is ours — skipping conversation ${conv.conversationId}.`);
     markHandled(conv.conversationId, conv.lastMessage);
     return;
   }
 
   log(`[main] Buyer says: "${latestMessage.slice(0, 100)}"`);
 
-  // Match SOP to item — fall back to API last message if DOM title is empty
-  const effectiveTitle  = itemTitle  || conv.lastMessage || '';
+  // SOP matching: API item title is most reliable; fall back to DOM title
+  // then to the last message text as a last resort.
+  const effectiveTitle  = conv.itemTitle || itemTitle || conv.lastMessage || '';
   const effectiveSender = senderName || conv.senderName  || '';
   log(`[main] effectiveTitle="${effectiveTitle.slice(0, 80)}", effectiveSender="${effectiveSender}"`);
 
