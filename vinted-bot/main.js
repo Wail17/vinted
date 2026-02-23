@@ -24,6 +24,76 @@ async function processConversation(conv) {
 
   log(`[main] Processing conversation ${conv.conversationId} with ${conv.senderName}`);
 
+  // ── Step 1: Offer fast-path (always runs before isHandled so offers are never skipped) ──
+  if (conv.isOffer) {
+    // Use a dedicated key so offer state is never confused with regular message state.
+    const offerKey = `offer:${conv.conversationId}`;
+    if (isHandled(offerKey, conv.lastMessage)) {
+      log(`[main] Offer in ${conv.conversationId} already handled — skipping.`);
+      return;
+    }
+
+    const effectiveTitleOffer = conv.itemTitle || conv.lastMessage || '';
+    const sop = matchSop(effectiveTitleOffer);
+    if (!sop) {
+      log(`[main] No SOP found for item "${effectiveTitleOffer.slice(0, 80)}" — skipping offer.`);
+      return;
+    }
+
+    const offered = conv.offeredPrice;
+    log(`[main] Price offer in conversation ${conv.conversationId}: €${offered ?? 'unknown'}, minimum: €${sop.price_minimum}`);
+
+    if (offered !== null && offered >= sop.price_minimum) {
+      // Offer meets the minimum — accept via API.
+      log(`[main] Offer €${offered} >= minimum €${sop.price_minimum} — accepting.`);
+      try {
+        const result = await acceptOffer(conv.conversationId, sop.price_minimum);
+        if (result.accepted) {
+          log(`[main] Offer accepted for conversation ${conv.conversationId}.`);
+        } else {
+          log(`[main] acceptOffer returned accepted=false (API may have already processed it).`);
+        }
+      } catch (err) {
+        log(`[main] acceptOffer error: ${err.message}`);
+      }
+      markHandled(offerKey, conv.lastMessage);
+      log(`[main] Done with offer conversation ${conv.conversationId}.`);
+      return;
+    }
+
+    if (offered !== null && offered < sop.price_minimum) {
+      // Offer below minimum — navigate and send counter-offer, skip Claude.
+      const counter = `Non désolé, minimum ${sop.price_minimum}€`;
+      log(`[main] Offer €${offered} < minimum €${sop.price_minimum} — sending counter: "${counter}"`);
+      await readConversation(conv.conversationUrl); // navigate so sendReply works
+      await randomDelay(1500, 3000);
+      await sendReply(counter);
+      markHandled(offerKey, conv.lastMessage);
+      log(`[main] Done with offer conversation ${conv.conversationId}.`);
+      return;
+    }
+
+    // offeredPrice is null — call acceptOffer() to fetch the real price from the API.
+    log(`[main] Offer price unclear — fetching from API.`);
+    try {
+      const result = await acceptOffer(conv.conversationId, sop.price_minimum);
+      if (result.offerPrice !== null) {
+        if (result.accepted) {
+          log(`[main] Offer of €${result.offerPrice} accepted for conversation ${conv.conversationId}.`);
+        } else {
+          log(`[main] Offer of €${result.offerPrice} below minimum — not accepted.`);
+        }
+      }
+    } catch (err) {
+      log(`[main] acceptOffer error: ${err.message}`);
+    }
+    markHandled(offerKey, conv.lastMessage);
+    log(`[main] Done with offer conversation ${conv.conversationId}.`);
+    return;
+  }
+
+  // ── Step 2: Normal message flow ───────────────────────────────────────────
+
   // Skip conversations where the last message was sent by us.
   // Compare against currentUserId fetched at startup from /api/v2/users/current —
   // this is the authoritative check; the opposite_user heuristic was unreliable.
@@ -70,48 +140,6 @@ async function processConversation(conv) {
     log(`[main] No SOP found for item "${effectiveTitle}" — skipping.`);
     return;
   }
-
-  // ── Offer fast-path ───────────────────────────────────────────────────────
-  // When the last action is a price offer we handle it directly without Claude.
-  if (conv.isOffer) {
-    const offered = conv.offeredPrice;
-    log(`[main] Price offer detected in conversation ${conv.conversationId}: €${offered ?? 'unknown'}, minimum: €${sop.price_minimum}`);
-
-    if (offered !== null && offered >= sop.price_minimum) {
-      // Offer meets the minimum — accept via API.
-      log(`[main] Offer €${offered} >= minimum €${sop.price_minimum} — accepting.`);
-      try {
-        const result = await acceptOffer(conv.conversationId, sop.price_minimum);
-        if (result.accepted) {
-          log(`[main] Offer accepted for conversation ${conv.conversationId}.`);
-        } else {
-          log(`[main] acceptOffer returned accepted=false (API may have already processed it).`);
-        }
-      } catch (err) {
-        log(`[main] acceptOffer error: ${err.message}`);
-      }
-      markHandled(conv.conversationId, conv.lastMessage);
-      log(`[main] Done with offer conversation ${conv.conversationId}.`);
-      return;
-    }
-
-    if (offered !== null && offered < sop.price_minimum) {
-      // Offer below minimum — send a counter-offer message, skip Claude.
-      const counter = `Non désolé, minimum ${sop.price_minimum}€`;
-      log(`[main] Offer €${offered} < minimum €${sop.price_minimum} — sending counter: "${counter}"`);
-      markHandled(conv.conversationId, conv.lastMessage);
-      await randomDelay(1500, 3000);
-      await sendReply(counter);
-      markHandled(conv.conversationId, counter);
-      log(`[main] Done with offer conversation ${conv.conversationId}.`);
-      return;
-    }
-
-    // offeredPrice is null (entity_type hinted offer but no price in description) —
-    // fall through so acceptOffer() below can fetch the price from the API.
-    log(`[main] Offer detected but price unclear — falling through to API acceptOffer.`);
-  }
-  // ─────────────────────────────────────────────────────────────────────────
 
   // Get Claude's reply
   const reply = await getClaudeReply(sop, messages, latestMessage);
