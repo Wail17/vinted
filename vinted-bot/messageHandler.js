@@ -416,7 +416,7 @@ export async function acceptOffer(conversationId, minPrice) {
  */
 export async function testAcceptOffer(conversationId, minPrice) {
   const { loadSession } = await import('./browser.js');
-  await loadSession(); // sets browser.js's module-level page; getPage() returns it
+  await loadSession(true); // skipProxyCheck=true: no proxy needed for local testing
   return await acceptOffer(conversationId, minPrice);
 }
 

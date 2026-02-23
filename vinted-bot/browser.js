@@ -57,7 +57,7 @@ async function verifyProxy() {
  * Throws SESSION_EXPIRED if the file is missing or has no refresh_token_web cookie.
  * Actual token validity is discovered lazily — the polling loop handles expiry.
  */
-export async function loadSession() {
+export async function loadSession(skipProxyCheck = false) {
   if (!fs.existsSync(config.sessionFile)) {
     throw new Error(
       'SESSION_EXPIRED: No session file found. Run  node browser.js --save-session  to log in manually.'
@@ -97,7 +97,7 @@ export async function loadSession() {
   page = await context.newPage();
 
   // Confirm traffic is routed through the proxy before doing anything else.
-  await verifyProxy();
+  if (!skipProxyCheck) await verifyProxy();
 
   return page;
 }
