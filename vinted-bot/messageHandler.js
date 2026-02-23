@@ -327,6 +327,16 @@ export async function acceptOffer(conversationId, minPrice) {
   // must navigate at least once to load the Vinted cookie context.
   await page.goto('https://www.vinted.be/inbox', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
+  // Vinted uses the double-submit cookie CSRF pattern: the inbox page sets an
+  // XSRF-TOKEN cookie, and every write request (PUT/POST) must echo it back as
+  // the X-CSRF-Token header.  GET requests are exempt — that is why the
+  // conversation GET works while the PUT returns 403 access_denied.
+  const allCookies = await page.context().cookies('https://www.vinted.be');
+  const csrfToken = allCookies.find(
+    (c) => c.name === 'XSRF-TOKEN' || c.name === '_csrf_token' || c.name === 'csrf_token',
+  )?.value ?? null;
+  log(`[messageHandler] acceptOffer: CSRF token ${csrfToken ? `found (${csrfToken.slice(0, 8)}…)` : 'NOT FOUND — PUT may still return 403'}`);
+
   const FETCH_OPTS = {
     credentials: 'include',
     headers: {
@@ -401,11 +411,19 @@ export async function acceptOffer(conversationId, minPrice) {
   const acceptUrl = `${baseUrl}/api/v2/transactions/${txnId}/offer_requests/${offerReqId}/accept`;
   log(`[messageHandler] acceptOffer: PUT ${acceptUrl}`);
 
-  const acceptResult = await page.evaluate(async ({ url, opts }) => {
-    const r = await fetch(url, { ...opts, method: 'PUT', body: JSON.stringify({}) });
+  const acceptResult = await page.evaluate(async ({ url, opts, csrfToken }) => {
+    const r = await fetch(url, {
+      ...opts,
+      method: 'PUT',
+      body: JSON.stringify({}),
+      headers: {
+        ...opts.headers,
+        ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+      },
+    });
     const text = await r.text();
     return { status: r.status, text };
-  }, { url: acceptUrl, opts: FETCH_OPTS });
+  }, { url: acceptUrl, opts: FETCH_OPTS, csrfToken });
 
   log(`[messageHandler] acceptOffer: PUT status=${acceptResult.status}, response=${acceptResult.text.slice(0, 300)}`);
 
