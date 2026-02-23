@@ -26,9 +26,9 @@ async function processConversation(conv) {
 
   // ── Step 1: Offer fast-path (always runs before isHandled so offers are never skipped) ──
   if (conv.isOffer) {
-    // Use a dedicated key so offer state is never confused with regular message state.
-    const offerKey = `offer:${conv.conversationId}`;
-    if (isHandled(offerKey, conv.lastMessage)) {
+    // Use a dedicated key "offer:{conversationId}" — never tied to message text,
+    // so the regular-message dedup path can never accidentally skip an offer.
+    if (isHandled('offer', conv.conversationId)) {
       log(`[main] Offer in ${conv.conversationId} already handled — skipping.`);
       return;
     }
@@ -56,7 +56,7 @@ async function processConversation(conv) {
       } catch (err) {
         log(`[main] acceptOffer error: ${err.message}`);
       }
-      markHandled(offerKey, conv.lastMessage);
+      markHandled('offer', conv.conversationId);
       log(`[main] Done with offer conversation ${conv.conversationId}.`);
       return;
     }
@@ -68,7 +68,7 @@ async function processConversation(conv) {
       await readConversation(conv.conversationUrl); // navigate so sendReply works
       await randomDelay(1500, 3000);
       await sendReply(counter);
-      markHandled(offerKey, conv.lastMessage);
+      markHandled('offer', conv.conversationId);
       log(`[main] Done with offer conversation ${conv.conversationId}.`);
       return;
     }
@@ -87,7 +87,7 @@ async function processConversation(conv) {
     } catch (err) {
       log(`[main] acceptOffer error: ${err.message}`);
     }
-    markHandled(offerKey, conv.lastMessage);
+    markHandled('offer', conv.conversationId);
     log(`[main] Done with offer conversation ${conv.conversationId}.`);
     return;
   }
