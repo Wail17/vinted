@@ -322,6 +322,11 @@ export async function acceptOffer(conversationId, minPrice) {
   const page = getPage();
   const baseUrl = config.vintedBaseUrl;
 
+  // Ensure session cookies are active before making API calls.
+  // When called from testAcceptOffer() the page is a blank new tab, so we
+  // must navigate at least once to load the Vinted cookie context.
+  await page.goto('https://www.vinted.be/inbox', { waitUntil: 'domcontentloaded', timeout: 60000 });
+
   const FETCH_OPTS = {
     credentials: 'include',
     headers: {
