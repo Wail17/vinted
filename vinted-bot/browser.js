@@ -11,6 +11,47 @@ let browser = null;
 let context = null;
 let page = null;
 
+// The VPS's own public IP. If the proxy is broken the outgoing IP will be this
+// address, which means Vinted would see the real server — a fatal condition.
+const VPS_IP = '46.224.113.203';
+
+/**
+ * Verify the browser proxy is working by checking the outgoing IP.
+ * Fetches https://api.ipify.org?format=json through the browser context
+ * (which routes via the configured proxy) and compares the returned IP
+ * against VPS_IP.
+ *
+ * Throws SESSION_EXPIRED if:
+ *   • the request fails (proxy unreachable), or
+ *   • the returned IP matches VPS_IP (proxy bypassed).
+ */
+async function verifyProxy() {
+  log('[browser] Verifying proxy — fetching outgoing IP via api.ipify.org…');
+  let detectedIp;
+  try {
+    const result = await page.evaluate(async () => {
+      const r = await fetch('https://api.ipify.org?format=json');
+      return r.json();
+    });
+    detectedIp = result?.ip;
+  } catch (err) {
+    throw new Error(
+      `SESSION_EXPIRED: Proxy check failed — could not reach api.ipify.org: ${err.message}`
+    );
+  }
+
+  log(`[browser] Proxy check: detected IP=${detectedIp}, VPS IP=${VPS_IP}`);
+
+  if (!detectedIp || detectedIp === VPS_IP) {
+    throw new Error(
+      `SESSION_EXPIRED: FATAL — outgoing IP (${detectedIp ?? 'unknown'}) matches VPS IP or is unreadable. ` +
+      'Proxy is not working. Refusing to continue.'
+    );
+  }
+
+  log(`[browser] Proxy check passed — outgoing IP ${detectedIp} differs from VPS IP.`);
+}
+
 /**
  * Load a saved Playwright browser context from the session file.
  * Throws SESSION_EXPIRED if the file is missing or has no refresh_token_web cookie.
@@ -54,6 +95,10 @@ export async function loadSession() {
   });
 
   page = await context.newPage();
+
+  // Confirm traffic is routed through the proxy before doing anything else.
+  await verifyProxy();
+
   return page;
 }
 
