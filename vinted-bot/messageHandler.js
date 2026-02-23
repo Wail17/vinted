@@ -409,6 +409,18 @@ export async function acceptOffer(conversationId, minPrice) {
 }
 
 /**
+ * Standalone test helper: boot the browser via loadSession() so that
+ * getPage() is populated, then call acceptOffer().
+ * Useful for manual testing outside the main polling loop, e.g.:
+ *   node -e "import('./messageHandler.js').then(m => m.testAcceptOffer('12345', 20))"
+ */
+export async function testAcceptOffer(conversationId, minPrice) {
+  const { loadSession } = await import('./browser.js');
+  await loadSession(); // sets browser.js's module-level page; getPage() returns it
+  return await acceptOffer(conversationId, minPrice);
+}
+
+/**
  * Type and send a reply in the currently open conversation.
  */
 export async function sendReply(replyText) {
